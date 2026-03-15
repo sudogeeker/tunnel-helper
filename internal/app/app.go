@@ -15,7 +15,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/huh"
 
@@ -41,7 +40,6 @@ type Config struct {
 	IkeAlg      string
 	EspAlg      string
 	Encap       bool
-	Keepalive   string
 	ConfDir     string
 	SwanctlDir  string
 	IfaceDir    string
@@ -386,16 +384,6 @@ func collectInputs(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 	cfg.Encap = encap
 
-	keepalive := ""
-	if err := askInput(prompter, "Keepalive (e.g. 20s, leave blank to skip)", &keepalive, validateKeepalive); err != nil {
-		return err
-	}
-	keepalive, err = normalizeKeepalive(keepalive)
-	if err != nil {
-		return err
-	}
-	cfg.Keepalive = keepalive
-
 	return nil
 }
 
@@ -505,33 +493,6 @@ func requireNonEmpty(value string) error {
 		return errors.New("value is required")
 	}
 	return nil
-}
-
-func validateKeepalive(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	_, err := normalizeKeepalive(value)
-	return err
-}
-
-func normalizeKeepalive(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", nil
-	}
-	if isDigits(value) {
-		value = value + "s"
-	}
-	d, err := time.ParseDuration(value)
-	if err != nil {
-		return "", errors.New("invalid duration")
-	}
-	if d <= 0 {
-		return "", errors.New("keepalive must be positive")
-	}
-	return value, nil
 }
 
 func isDigits(s string) bool {
@@ -742,6 +703,10 @@ func buildConn(cfg *Config) string {
 	b.WriteString("        version = 2\n")
 	fmt.Fprintf(&b, "        local_addrs = %s\n", cfg.LocalUnder)
 	fmt.Fprintf(&b, "        remote_addrs = %s\n\n", cfg.RemoteUnder)
+	if cfg.Encap {
+		b.WriteString("        encap = yes\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("        local {\n")
 	b.WriteString("            auth = psk\n")
 	fmt.Fprintf(&b, "            id = %s\n", cfg.LocalID)
@@ -763,12 +728,6 @@ func buildConn(cfg *Config) string {
 	b.WriteString("                rekey_time = 8h\n")
 	b.WriteString("                life_time = 10h\n")
 	b.WriteString("                dpd_action = restart\n")
-	if cfg.Encap {
-		b.WriteString("                encap = yes\n")
-	}
-	if cfg.Keepalive != "" {
-		fmt.Fprintf(&b, "                keepalive = %s\n", cfg.Keepalive)
-	}
 	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
 	fmt.Fprintf(&b, "        proposals = %s\n", cfg.IkeAlg)
