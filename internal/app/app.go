@@ -17,9 +17,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
+
 	"go-xfrm/internal/sys"
 	"go-xfrm/internal/ui"
 )
+
+var ErrAborted = errors.New("aborted")
 
 type Config struct {
 	UnderlayFam int
@@ -71,15 +75,15 @@ func Run(args []string) error {
 		return err
 	}
 
-	if err := checkXFRMSupport(uiOut); err != nil {
+	if err := wrapAbort(checkXFRMSupport(uiOut)); err != nil {
 		return err
 	}
 
-	if err := ensurePackages(uiOut, prompter); err != nil {
+	if err := wrapAbort(ensurePackages(uiOut, prompter)); err != nil {
 		return err
 	}
 
-	if err := ensureSwanctl(uiOut); err != nil {
+	if err := wrapAbort(ensureSwanctl(uiOut)); err != nil {
 		return err
 	}
 
@@ -95,23 +99,23 @@ func Run(args []string) error {
 	uiOut.Dim("XFRM interface + PFS rotation")
 	uiOut.HR()
 
-	if err := collectInputs(cfg, uiOut, prompter); err != nil {
+	if err := wrapAbort(collectInputs(cfg, uiOut, prompter)); err != nil {
 		return err
 	}
 
-	if err := computePaths(cfg); err != nil {
+	if err := wrapAbort(computePaths(cfg)); err != nil {
 		return err
 	}
 
-	if err := writeFiles(cfg, uiOut, prompter); err != nil {
+	if err := wrapAbort(writeFiles(cfg, uiOut, prompter)); err != nil {
 		return err
 	}
 
-	if err := ensureSwanctlConf(cfg, uiOut, prompter); err != nil {
+	if err := wrapAbort(ensureSwanctlConf(cfg, uiOut, prompter)); err != nil {
 		return err
 	}
 
-	if err := ensureInterfacesSource(uiOut, prompter); err != nil {
+	if err := wrapAbort(ensureInterfacesSource(uiOut, prompter)); err != nil {
 		return err
 	}
 
@@ -124,6 +128,20 @@ func runtimeCheck() error {
 		return fmt.Errorf("this tool is intended for Linux; current GOOS=%s", runtime.GOOS)
 	}
 	return nil
+}
+
+func isAbortErr(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, huh.ErrUserAborted)
+}
+
+func wrapAbort(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isAbortErr(err) {
+		return ErrAborted
+	}
+	return err
 }
 
 func requireCommands(uiOut *ui.UI, names ...string) error {
@@ -399,7 +417,7 @@ func askSelectRaw(prompter *ui.Prompter, title string, options []ui.Option, targ
 	for {
 		if err := prompter.Select(title, options, target); err == nil {
 			return nil
-		} else if errors.Is(err, io.EOF) {
+		} else if isAbortErr(err) {
 			return err
 		}
 	}
@@ -409,7 +427,7 @@ func askInput(prompter *ui.Prompter, title string, target *string, validate func
 	for {
 		if err := prompter.Input(title, target, validate); err == nil {
 			return nil
-		} else if errors.Is(err, io.EOF) {
+		} else if isAbortErr(err) {
 			return err
 		}
 	}
@@ -420,7 +438,7 @@ func askConfirm(prompter *ui.Prompter, title string, defaultYes bool) (bool, err
 		val := defaultYes
 		if err := prompter.Confirm(title, &val, defaultYes); err == nil {
 			return val, nil
-		} else if errors.Is(err, io.EOF) {
+		} else if isAbortErr(err) {
 			return false, err
 		}
 	}

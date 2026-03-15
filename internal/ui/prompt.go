@@ -19,6 +19,12 @@ func NewPrompter(ui *UI) *Prompter {
 	return &Prompter{ui: ui, out: ui.Out}
 }
 
+func (p *Prompter) newForm(groups ...*huh.Group) *huh.Form {
+	keymap := huh.NewDefaultKeyMap()
+	keymap.Quit.SetKeys("ctrl+c", "ctrl+z")
+	return huh.NewForm(groups...).WithKeyMap(keymap)
+}
+
 type Option struct {
 	Label string
 	Value string
@@ -30,12 +36,11 @@ func (p *Prompter) Select(title string, options []Option, value *string) error {
 		for _, opt := range options {
 			huhOptions = append(huhOptions, huh.NewOption(opt.Label, opt.Value))
 		}
-		form := huh.NewForm(
+		return p.newForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().Title(title).Options(huhOptions...).Value(value),
 			),
-		)
-		return form.Run()
+		).Run()
 	}
 
 	fmt.Fprintln(p.out, title)
@@ -65,8 +70,7 @@ func (p *Prompter) Input(title string, value *string, validate func(string) erro
 		if validate != nil {
 			input = input.Validate(func(s string) error { return validate(strings.TrimSpace(s)) })
 		}
-		form := huh.NewForm(huh.NewGroup(input))
-		return form.Run()
+		return p.newForm(huh.NewGroup(input)).Run()
 	}
 
 	prompt := title
@@ -95,7 +99,7 @@ func (p *Prompter) Confirm(title string, value *bool, defaultYes bool) error {
 	if p.ui.TTY {
 		c := huh.NewConfirm().Title(title).Value(value)
 		c = c.Affirmative("Yes").Negative("No")
-		return huh.NewForm(huh.NewGroup(c)).Run()
+		return p.newForm(huh.NewGroup(c)).Run()
 	}
 
 	def := "y/N"
