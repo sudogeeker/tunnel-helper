@@ -1,9 +1,15 @@
 package app
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,31 +31,51 @@ import (
 var ErrAborted = errors.New("aborted")
 
 type Config struct {
-	UnderlayFam int
-	Device      string
-	RemoteUnder string
-	LocalUnder  string
-	RemoteID    string
-	LocalID     string
-	Name        string
-	XfrmIf      string
-	IfID        int
-	InnerFam    int
-	InnerCIDR   string
-	PSK         string
-	IkeAlg      string
-	EspAlg      string
-	Encap       bool
-	ConfDir     string
-	SwanctlDir  string
-	IfaceDir    string
-	ConnFile    string
-	SecretsFile string
-	IfaceFile   string
-	DefaultDev  string
-	RouteDev    string
-	RouteSrc    string
+	UnderlayFam      int
+	Device           string
+	RemoteUnder      string
+	LocalUnder       string
+	RemoteID         string
+	LocalID          string
+	Name             string
+	XfrmIf           string
+	IfID             int
+	InnerFam         int
+	InnerCIDR        string
+	AuthMethod       string
+	PSK              string
+	KexGroup         string
+	RPKAlgo          string
+	RPKLocalKey      string
+	RPKRemoteKey     string
+	RPKLocalPrivFile string
+	RPKLocalPubFile  string
+	RPKRemotePubFile string
+	RPKLocalPubDER   []byte
+	RPKRemotePubDER  []byte
+	IkeAlg           string
+	EspAlg           string
+	Encap            bool
+	ConfDir          string
+	SwanctlDir       string
+	IfaceDir         string
+	ConnFile         string
+	SecretsFile      string
+	IfaceFile        string
+	DefaultDev       string
+	RouteDev         string
+	RouteSrc         string
 }
+
+const (
+	AuthPSK = "psk"
+	AuthRPK = "rpk"
+
+	RPKAlgoP256    = "p256"
+	RPKAlgoP384    = "p384"
+	RPKAlgoP521    = "p521"
+	RPKAlgoEd25519 = "ed25519"
+)
 
 func Run(args []string) error {
 	fs := flag.NewFlagSet("xfrmgen", flag.ContinueOnError)
@@ -104,6 +130,8 @@ func Run(args []string) error {
 	if err := wrapAbort(computePaths(cfg)); err != nil {
 		return err
 	}
+
+	printConfigSummary(cfg, uiOut)
 
 	if err := wrapAbort(writeFiles(cfg, uiOut, prompter)); err != nil {
 		return err
@@ -339,42 +367,69 @@ func collectInputs(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 	cfg.InnerCIDR = innerCIDR
 
-	psk := ""
-	if err := askInput(prompter, "PSK (leave blank to auto-generate)", &psk, nil); err != nil {
+	authChoice := "1"
+	if err := askSelectRaw(prompter, "Authentication method", []ui.Option{
+		{Label: "1) PSK (pre-shared key)", Value: "1"},
+		{Label: "2) RPK (raw public key)", Value: "2"},
+	}, &authChoice); err != nil {
 		return err
 	}
-	if strings.TrimSpace(psk) == "" {
-		gen, err := generatePSK()
-		if err != nil {
+	switch authChoice {
+	case "1":
+		cfg.AuthMethod = AuthPSK
+		psk := ""
+		if err := askInput(prompter, "PSK (leave blank to auto-generate)", &psk, nil); err != nil {
 			return err
 		}
-		psk = gen
-		uiOut.Ok("generated PSK: " + psk)
+		if strings.TrimSpace(psk) == "" {
+			gen, err := generatePSK()
+			if err != nil {
+				return err
+			}
+			psk = gen
+			uiOut.Ok("generated PSK: " + psk)
+		}
+		cfg.PSK = psk
+	case "2":
+		cfg.AuthMethod = AuthRPK
+		if err := selectRPKAlgo(cfg, uiOut, prompter); err != nil {
+			return err
+		}
+		if err := prepareRPK(cfg, uiOut, prompter); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("invalid authentication choice: %s", authChoice)
 	}
-	cfg.PSK = psk
 
 	algoChoice := "1"
 	if err := askSelectRaw(prompter, "Algorithm profile", []ui.Option{
-		{Label: "1) aes128gcm16-prfsha256-modp2048 (recommended)", Value: "1"},
-		{Label: "2) aes256gcm16-prfsha256-ecp256 (ECC)", Value: "2"},
-		{Label: "3) aes256gcm16-prfsha384-modp3072 (high security)", Value: "3"},
+		{Label: "1) aes128gcm16-prfsha256 (recommended)", Value: "1"},
+		{Label: "2) aes256gcm16-prfsha256", Value: "2"},
+		{Label: "3) aes256gcm16-prfsha384 (high security)", Value: "3"},
 	}, &algoChoice); err != nil {
 		return err
 	}
 
+	ikeBase := ""
 	switch algoChoice {
 	case "1":
-		cfg.IkeAlg = "aes128gcm16-prfsha256-modp2048"
+		ikeBase = "aes128gcm16-prfsha256"
 		cfg.EspAlg = "aes128gcm16"
 	case "2":
-		cfg.IkeAlg = "aes256gcm16-prfsha256-ecp256"
+		ikeBase = "aes256gcm16-prfsha256"
 		cfg.EspAlg = "aes256gcm16"
 	case "3":
-		cfg.IkeAlg = "aes256gcm16-prfsha384-modp3072"
+		ikeBase = "aes256gcm16-prfsha384"
 		cfg.EspAlg = "aes256gcm16"
 	default:
 		return fmt.Errorf("invalid algorithm choice: %s", algoChoice)
 	}
+
+	if err := selectKexGroup(cfg, uiOut, prompter); err != nil {
+		return err
+	}
+	cfg.IkeAlg = fmt.Sprintf("%s-%s", ikeBase, cfg.KexGroup)
 
 	uiOut.Info("IKE lifetime: 1h, Child SA lifetime: 8h (adjust in config if needed)")
 
@@ -633,6 +688,435 @@ func generatePSK() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+func selectRPKAlgo(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
+	options := []ui.Option{
+		{Label: "ECDSA P-384 (recommended)", Value: RPKAlgoP384},
+		{Label: "ECDSA P-256", Value: RPKAlgoP256},
+		{Label: "ECDSA P-521", Value: RPKAlgoP521},
+	}
+
+	if supportsEd25519(uiOut) {
+		options = append([]ui.Option{{Label: "Ed25519", Value: RPKAlgoEd25519}}, options...)
+	}
+
+	choice := options[0].Value
+	if err := askSelectRaw(prompter, "RPK key algorithm", options, &choice); err != nil {
+		return err
+	}
+	cfg.RPKAlgo = choice
+	return nil
+}
+
+func prepareRPK(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
+	cfg.RPKLocalKey = cfg.Name + "-local"
+	cfg.RPKRemoteKey = cfg.Name + "-remote"
+	cfg.RPKLocalPrivFile = filepath.Join(cfg.SwanctlDir, "ecdsa", cfg.RPKLocalKey+".key")
+	cfg.RPKLocalPubFile = filepath.Join(cfg.SwanctlDir, "pubkey", cfg.RPKLocalKey+".pub")
+	cfg.RPKRemotePubFile = filepath.Join(cfg.SwanctlDir, "pubkey", cfg.RPKRemoteKey+".pub")
+
+	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "ecdsa"), 0700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "pubkey"), 0755); err != nil {
+		return err
+	}
+
+	localPrivExists := fileExists(cfg.RPKLocalPrivFile)
+	localPubExists := fileExists(cfg.RPKLocalPubFile)
+	if localPrivExists && localPubExists {
+		reuse, err := askConfirm(prompter, "Local RPK key files exist. Reuse them?", true)
+		if err != nil {
+			return err
+		}
+		if reuse {
+			der, err := readPublicKeyDER(cfg.RPKLocalPubFile)
+			if err != nil {
+				return err
+			}
+			cfg.RPKLocalPubDER = der
+			existingAlgo, err := publicKeyAlgoFromDER(der)
+			if err != nil {
+				return err
+			}
+			if cfg.RPKAlgo != "" && existingAlgo != cfg.RPKAlgo {
+				uiOut.Warn(fmt.Sprintf("Existing local RPK key is %s but %s was selected.", existingAlgo, cfg.RPKAlgo))
+				ok, err := askConfirm(prompter, "Regenerate local RPK key pair with selected algorithm?", true)
+				if err != nil {
+					return err
+				}
+				if ok {
+					if err := generateAndWriteRPK(cfg); err != nil {
+						return err
+					}
+				} else {
+					cfg.RPKAlgo = existingAlgo
+				}
+			} else {
+				cfg.RPKAlgo = existingAlgo
+			}
+		} else {
+			if err := generateAndWriteRPK(cfg); err != nil {
+				return err
+			}
+		}
+	} else if localPrivExists || localPubExists {
+		uiOut.Warn("Only one of the local RPK key files exists.")
+		ok, err := askConfirm(prompter, "Regenerate local RPK key pair now?", true)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("cancelled; local RPK key files are incomplete")
+		}
+		if err := generateAndWriteRPK(cfg); err != nil {
+			return err
+		}
+	} else {
+		if err := generateAndWriteRPK(cfg); err != nil {
+			return err
+		}
+	}
+
+	uiOut.HR()
+	uiOut.Title("Local RPK public key (base64 DER)")
+	fmt.Fprintln(uiOut.Out, base64.StdEncoding.EncodeToString(cfg.RPKLocalPubDER))
+	uiOut.Dim("Copy this string to the remote side and paste it when prompted.")
+	uiOut.Info("Local RPK public key file: " + cfg.RPKLocalPubFile)
+	uiOut.HR()
+
+	remoteInput := ""
+	if err := askInput(prompter, "Remote public key (base64 DER or path to PEM/DER file)", &remoteInput, func(v string) error {
+		der, err := parsePublicKeyInput(v)
+		if err != nil {
+			return err
+		}
+		cfg.RPKRemotePubDER = der
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if fileExists(cfg.RPKRemotePubFile) {
+		overwrite, err := askConfirm(prompter, "Remote RPK public key file exists. Overwrite?", false)
+		if err != nil {
+			return err
+		}
+		if !overwrite {
+			return errors.New("cancelled; remote public key file exists")
+		}
+	}
+	if err := writePublicKeyPEM(cfg.RPKRemotePubFile, cfg.RPKRemotePubDER); err != nil {
+		return err
+	}
+	uiOut.Ok("wrote: " + cfg.RPKRemotePubFile)
+	return nil
+}
+
+func generateAndWriteRPK(cfg *Config) error {
+	switch cfg.RPKAlgo {
+	case RPKAlgoEd25519:
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return err
+		}
+		privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+		if err != nil {
+			return err
+		}
+		privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER})
+		if err := os.WriteFile(cfg.RPKLocalPrivFile, privPEM, 0600); err != nil {
+			return err
+		}
+		pubDER, err := x509.MarshalPKIXPublicKey(priv.Public())
+		if err != nil {
+			return err
+		}
+		cfg.RPKLocalPubDER = pubDER
+		return writePublicKeyPEM(cfg.RPKLocalPubFile, pubDER)
+	case RPKAlgoP256, RPKAlgoP384, RPKAlgoP521:
+		curve := elliptic.P256()
+		switch cfg.RPKAlgo {
+		case RPKAlgoP384:
+			curve = elliptic.P384()
+		case RPKAlgoP521:
+			curve = elliptic.P521()
+		}
+		key, err := ecdsa.GenerateKey(curve, rand.Reader)
+		if err != nil {
+			return err
+		}
+		privDER, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			return err
+		}
+		privPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER})
+		if err := os.WriteFile(cfg.RPKLocalPrivFile, privPEM, 0600); err != nil {
+			return err
+		}
+
+		pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+		if err != nil {
+			return err
+		}
+		cfg.RPKLocalPubDER = pubDER
+		return writePublicKeyPEM(cfg.RPKLocalPubFile, pubDER)
+	default:
+		return fmt.Errorf("unsupported RPK algorithm: %s", cfg.RPKAlgo)
+	}
+}
+
+func parsePublicKeyInput(input string) ([]byte, error) {
+	val := strings.TrimSpace(input)
+	if val == "" {
+		return nil, errors.New("value is required")
+	}
+	if val[0] == '@' {
+		val = strings.TrimSpace(val[1:])
+	}
+	if fileExists(val) {
+		return readPublicKeyDER(val)
+	}
+	compact := strings.Join(strings.Fields(val), "")
+	der, err := base64.StdEncoding.DecodeString(compact)
+	if err != nil {
+		return nil, errors.New("invalid base64 or file path")
+	}
+	if err := validatePublicKeyDER(der); err != nil {
+		return nil, err
+	}
+	return der, nil
+}
+
+func readPublicKeyDER(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if block, _ := pem.Decode(data); block != nil {
+		if err := validatePublicKeyDER(block.Bytes); err != nil {
+			return nil, err
+		}
+		return block.Bytes, nil
+	}
+	if err := validatePublicKeyDER(data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func validatePublicKeyDER(der []byte) error {
+	if len(der) == 0 {
+		return errors.New("public key is empty")
+	}
+	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
+		return errors.New("invalid public key data")
+	}
+	return nil
+}
+
+func publicKeyAlgoFromDER(der []byte) (string, error) {
+	key, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return "", errors.New("invalid public key data")
+	}
+	switch k := key.(type) {
+	case *ecdsa.PublicKey:
+		switch k.Curve.Params().Name {
+		case "P-256":
+			return RPKAlgoP256, nil
+		case "P-384":
+			return RPKAlgoP384, nil
+		case "P-521":
+			return RPKAlgoP521, nil
+		default:
+			return "", errors.New("unsupported ECDSA curve")
+		}
+	case ed25519.PublicKey:
+		return RPKAlgoEd25519, nil
+	default:
+		return "", errors.New("unsupported public key type")
+	}
+}
+
+func writePublicKeyPEM(path string, der []byte) error {
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	return os.WriteFile(path, pem.EncodeToMemory(block), 0644)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func supportsEd25519(uiOut *ui.UI) bool {
+	if !sys.LookPath("pki") {
+		uiOut.Warn("pki not found; Ed25519 support check skipped")
+		return false
+	}
+	if _, err := sys.Output("pki", "--gen", "--type", "ed25519", "--outform", "der"); err != nil {
+		return false
+	}
+	return true
+}
+
+func selectKexGroup(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
+	supported, err := detectKeyExchangeGroups()
+	if err != nil {
+		uiOut.Warn("could not detect key exchange groups; falling back to defaults")
+		supported = []string{"CURVE_25519", "ECP_384", "MODP_3072"}
+	}
+
+	options := buildKexOptions(supported, uiOut)
+	if len(options) == 0 {
+		return errors.New("no usable key exchange groups detected")
+	}
+
+	choice := options[0].Value
+	if err := askSelectRaw(prompter, "Key exchange (IKE DH group)", options, &choice); err != nil {
+		return err
+	}
+	cfg.KexGroup = choice
+	return nil
+}
+
+func detectKeyExchangeGroups() ([]string, error) {
+	out, err := sys.Output("swanctl", "--list-algs")
+	if err != nil {
+		return nil, err
+	}
+
+	var groups []string
+	inKE := false
+	for _, line := range strings.Split(out, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" {
+			continue
+		}
+		if strings.HasSuffix(trim, ":") {
+			section := strings.TrimSuffix(trim, ":")
+			if strings.EqualFold(section, "key exchange") {
+				inKE = true
+			} else if inKE {
+				break
+			}
+			continue
+		}
+		if !inKE {
+			continue
+		}
+		fields := strings.Fields(trim)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		if idx := strings.Index(name, "["); idx >= 0 {
+			name = name[:idx]
+		}
+		name = strings.TrimSpace(name)
+		if name != "" {
+			groups = append(groups, strings.ToUpper(name))
+		}
+	}
+	if len(groups) == 0 {
+		return nil, errors.New("no key exchange groups found")
+	}
+	return groups, nil
+}
+
+func buildKexOptions(supported []string, uiOut *ui.UI) []ui.Option {
+	secureOrder := []string{
+		"CURVE_25519",
+		"CURVE_448",
+		"ECP_384",
+		"ECP_521",
+		"MODP_4096",
+		"MODP_3072",
+	}
+	supportedSet := make(map[string]bool, len(supported))
+	for _, name := range supported {
+		supportedSet[name] = true
+	}
+
+	options := make([]ui.Option, 0)
+	for _, name := range secureOrder {
+		if !supportedSet[name] {
+			continue
+		}
+		proposal, ok := kexProposalName(name)
+		if !ok {
+			continue
+		}
+		label := name
+		if len(options) == 0 {
+			label = label + " (recommended)"
+		}
+		options = append(options, ui.Option{Label: label, Value: proposal})
+	}
+
+	if len(options) > 0 {
+		return options
+	}
+
+	uiOut.Warn("no preferred secure key exchange groups found; showing all detected groups")
+	for _, name := range supported {
+		proposal, ok := kexProposalName(name)
+		if !ok {
+			continue
+		}
+		options = append(options, ui.Option{Label: name, Value: proposal})
+	}
+	return options
+}
+
+func kexProposalName(name string) (string, bool) {
+	switch strings.ToUpper(name) {
+	case "MODP_1024":
+		return "modp1024", true
+	case "MODP_1536":
+		return "modp1536", true
+	case "MODP_2048":
+		return "modp2048", true
+	case "MODP_3072":
+		return "modp3072", true
+	case "MODP_4096":
+		return "modp4096", true
+	case "MODP_6144":
+		return "modp6144", true
+	case "MODP_8192":
+		return "modp8192", true
+	case "MODP_1024_160":
+		return "modp1024s160", true
+	case "MODP_2048_224":
+		return "modp2048s224", true
+	case "MODP_2048_256":
+		return "modp2048s256", true
+	case "ECP_192":
+		return "ecp192", true
+	case "ECP_224":
+		return "ecp224", true
+	case "ECP_256":
+		return "ecp256", true
+	case "ECP_384":
+		return "ecp384", true
+	case "ECP_521":
+		return "ecp521", true
+	case "ECP_224_BP":
+		return "ecp224bp", true
+	case "ECP_256_BP":
+		return "ecp256bp", true
+	case "ECP_384_BP":
+		return "ecp384bp", true
+	case "ECP_512_BP":
+		return "ecp512bp", true
+	case "CURVE_25519":
+		return "curve25519", true
+	case "CURVE_448":
+		return "curve448", true
+	default:
+		return "", false
+	}
+}
+
 func computePaths(cfg *Config) error {
 	cfg.ConnFile = filepath.Join(cfg.ConfDir, cfg.XfrmIf+".conf")
 	cfg.SecretsFile = filepath.Join(cfg.SwanctlDir, "conf.d", cfg.XfrmIf+".secrets")
@@ -708,11 +1192,21 @@ func buildConn(cfg *Config) string {
 	}
 	b.WriteString("\n")
 	b.WriteString("        local {\n")
-	b.WriteString("            auth = psk\n")
+	if cfg.AuthMethod == AuthRPK {
+		b.WriteString("            auth = pubkey\n")
+		fmt.Fprintf(&b, "            pubkeys = %s\n", filepath.Base(cfg.RPKLocalPubFile))
+	} else {
+		b.WriteString("            auth = psk\n")
+	}
 	fmt.Fprintf(&b, "            id = %s\n", cfg.LocalID)
 	b.WriteString("        }\n")
 	b.WriteString("        remote {\n")
-	b.WriteString("            auth = psk\n")
+	if cfg.AuthMethod == AuthRPK {
+		b.WriteString("            auth = pubkey\n")
+		fmt.Fprintf(&b, "            pubkeys = %s\n", filepath.Base(cfg.RPKRemotePubFile))
+	} else {
+		b.WriteString("            auth = psk\n")
+	}
 	fmt.Fprintf(&b, "            id = %s\n", cfg.RemoteID)
 	b.WriteString("        }\n\n")
 	b.WriteString("        children {\n")
@@ -742,6 +1236,10 @@ func buildConn(cfg *Config) string {
 
 func buildSecrets(cfg *Config) string {
 	var b strings.Builder
+	if cfg.AuthMethod == AuthRPK {
+		b.WriteString("# No PSK secrets required for RPK\n")
+		return b.String()
+	}
 	fmt.Fprintf(&b, "# PSK for %s\n", cfg.Name)
 	b.WriteString("secrets {\n")
 	fmt.Fprintf(&b, "    ike-%s {\n", cfg.Name)
@@ -774,6 +1272,70 @@ func buildIface(cfg *Config) string {
 	fmt.Fprintf(&b, "    down    ip link set %s down\n", cfg.XfrmIf)
 	fmt.Fprintf(&b, "    post-down ip link del %s 2>/dev/null || true\n", cfg.XfrmIf)
 	return b.String()
+}
+
+func printConfigSummary(cfg *Config, uiOut *ui.UI) {
+	authLabel := "PSK"
+	if cfg.AuthMethod == AuthRPK {
+		authLabel = "RPK"
+	}
+	pskNote := "n/a"
+	if cfg.AuthMethod == AuthPSK {
+		pskNote = "not set"
+		if strings.TrimSpace(cfg.PSK) != "" {
+			pskNote = fmt.Sprintf("set (hidden, len=%d)", len(cfg.PSK))
+		}
+	}
+	encap := "no"
+	if cfg.Encap {
+		encap = "yes"
+	}
+
+	uiOut.HR()
+	uiOut.Title("Configuration summary")
+	fmt.Fprintf(uiOut.Out, "Underlay IP version: IPv%d\n", cfg.UnderlayFam)
+	fmt.Fprintf(uiOut.Out, "Primary device: %s\n", cfg.Device)
+	fmt.Fprintf(uiOut.Out, "Remote underlay IP: %s\n", cfg.RemoteUnder)
+	fmt.Fprintf(uiOut.Out, "Local underlay IP: %s\n", cfg.LocalUnder)
+	fmt.Fprintf(uiOut.Out, "Local ID: %s\n", cfg.LocalID)
+	fmt.Fprintf(uiOut.Out, "Remote ID: %s\n", cfg.RemoteID)
+	fmt.Fprintf(uiOut.Out, "Tunnel name: %s\n", cfg.Name)
+	fmt.Fprintf(uiOut.Out, "XFRM interface: %s\n", cfg.XfrmIf)
+	fmt.Fprintf(uiOut.Out, "if_id: %d\n", cfg.IfID)
+	fmt.Fprintf(uiOut.Out, "Inner IP version: IPv%d\n", cfg.InnerFam)
+	fmt.Fprintf(uiOut.Out, "Inner CIDR: %s\n", cfg.InnerCIDR)
+	fmt.Fprintf(uiOut.Out, "Auth method: %s\n", authLabel)
+	if cfg.KexGroup != "" {
+		fmt.Fprintf(uiOut.Out, "Key exchange group: %s\n", cfg.KexGroup)
+	}
+	fmt.Fprintf(uiOut.Out, "IKE proposal: %s\n", cfg.IkeAlg)
+	fmt.Fprintf(uiOut.Out, "ESP proposal: %s\n", cfg.EspAlg)
+	fmt.Fprintf(uiOut.Out, "Encap: %s\n", encap)
+	if cfg.AuthMethod == AuthPSK {
+		fmt.Fprintf(uiOut.Out, "PSK: %s\n", pskNote)
+	} else {
+		if cfg.RPKAlgo != "" {
+			fmt.Fprintf(uiOut.Out, "RPK key algorithm: %s\n", cfg.RPKAlgo)
+		}
+		fmt.Fprintf(uiOut.Out, "Local private key: %s\n", cfg.RPKLocalPrivFile)
+		fmt.Fprintf(uiOut.Out, "Local public key: %s\n", cfg.RPKLocalPubFile)
+		fmt.Fprintf(uiOut.Out, "Remote public key: %s\n", cfg.RPKRemotePubFile)
+	}
+	if cfg.RouteDev != "" {
+		fmt.Fprintf(uiOut.Out, "Route device: %s\n", cfg.RouteDev)
+	}
+	if cfg.RouteSrc != "" {
+		fmt.Fprintf(uiOut.Out, "Route source: %s\n", cfg.RouteSrc)
+	}
+	fmt.Fprintf(uiOut.Out, "Conn file: %s\n", cfg.ConnFile)
+	fmt.Fprintf(uiOut.Out, "Secrets file: %s\n", cfg.SecretsFile)
+	fmt.Fprintf(uiOut.Out, "Iface file: %s\n", cfg.IfaceFile)
+	uiOut.HR()
+	if cfg.AuthMethod == AuthPSK {
+		uiOut.Dim("PSK value is stored in the secrets file.")
+	} else {
+		uiOut.Dim("RPK public keys are stored in swanctl/pubkey.")
+	}
 }
 
 func ensureSwanctlConf(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
@@ -852,7 +1414,12 @@ func printNextSteps(cfg *Config, uiOut *ui.UI) {
 	fmt.Fprintf(uiOut.Out, "  ping <remote-inner-ip> -I %s\n", cfg.XfrmIf)
 	uiOut.HR()
 	uiOut.Warn("Remote side needs:")
-	fmt.Fprintf(uiOut.Out, "  - Same PSK (see %s)\n", cfg.SecretsFile)
+	if cfg.AuthMethod == AuthPSK {
+		fmt.Fprintf(uiOut.Out, "  - Same PSK (see %s)\n", cfg.SecretsFile)
+	} else {
+		fmt.Fprintf(uiOut.Out, "  - Your RPK public key (see %s)\n", cfg.RPKLocalPubFile)
+		fmt.Fprintf(uiOut.Out, "  - You must have their RPK public key (see %s)\n", cfg.RPKRemotePubFile)
+	}
 	fmt.Fprintf(uiOut.Out, "  - Symmetric underlay IPs\n")
 	fmt.Fprintf(uiOut.Out, "  - Same if_id: %d (recommended)\n", cfg.IfID)
 	fmt.Fprintf(uiOut.Out, "  - Symmetric inner IPs (/127 or /31)\n")
