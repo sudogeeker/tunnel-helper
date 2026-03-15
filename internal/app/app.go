@@ -282,10 +282,13 @@ func collectInputs(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	if cfg.RouteSrc == "" {
-		uiOut.Warn("could not detect local source IP; you must enter it")
+		uiOut.Warn("could not detect local source IP; enter it or use %any")
 	}
 
 	local := cfg.RouteSrc
+	if local == "" {
+		local = "%any"
+	}
 	if err := askInput(prompter, "Local underlay IP (or %any)", &local, validateUnderlay(cfg.UnderlayFam)); err != nil {
 		return err
 	}
@@ -446,7 +449,7 @@ func askConfirm(prompter *ui.Prompter, title string, defaultYes bool) (bool, err
 
 func validateUnderlay(fam int) func(string) error {
 	return func(value string) error {
-		value = strings.TrimSpace(value)
+		value = normalizeAnyToken(value)
 		if value == "" {
 			return errors.New("value is required")
 		}
@@ -542,14 +545,29 @@ func isDigits(s string) bool {
 }
 
 func isAny(s string) bool {
-	return strings.EqualFold(strings.TrimSpace(s), "%any")
+	return strings.EqualFold(normalizeAnyToken(s), "%any")
 }
 
 func normalizeAny(s string) string {
-	if isAny(s) {
+	s = normalizeAnyToken(s)
+	if strings.EqualFold(s, "%any") {
 		return "%any"
 	}
-	return strings.TrimSpace(s)
+	return s
+}
+
+func normalizeAnyToken(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+		}
+	}
+	s = strings.ReplaceAll(s, "\uFF05", "%")
+	if strings.EqualFold(s, "any") {
+		return "%any"
+	}
+	return s
 }
 
 func defaultDev(fam int) string {
