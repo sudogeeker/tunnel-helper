@@ -111,6 +111,10 @@ func Run(args []string) error {
 		return err
 	}
 
+	if err := wrapAbort(checkNetworkingMode(uiOut)); err != nil {
+		return err
+	}
+
 	checkStrongSwanService(uiOut)
 
 	cfg := &Config{}
@@ -245,6 +249,16 @@ func ensurePackages(uiOut *ui.UI, prompter *ui.Prompter) error {
 func ensureSwanctl(uiOut *ui.UI) error {
 	if !sys.LookPath("swanctl") {
 		return errors.New("swanctl not found; check installation")
+	}
+	return nil
+}
+
+func checkNetworkingMode(uiOut *ui.UI) error {
+	if !sys.LookPath("ifup") {
+		return errors.New("ifupdown not detected (ifup missing); this tool requires /etc/network/interfaces, netplan/systemd-networkd are not supported")
+	}
+	if _, err := os.Stat("/etc/network/interfaces"); err != nil {
+		return errors.New("missing /etc/network/interfaces; this tool requires ifupdown networking")
 	}
 	return nil
 }
@@ -1399,9 +1413,6 @@ func ensureInterfacesSource(uiOut *ui.UI, prompter *ui.Prompter) error {
 	path := "/etc/network/interfaces"
 	content, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 	text := string(content)
