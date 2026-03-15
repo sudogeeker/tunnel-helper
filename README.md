@@ -8,6 +8,8 @@ Run from GitHub (no clone, downloads latest release and runs):
 bash <(curl -fsSL https://raw.githubusercontent.com/sudogeeker/go-xfrm/main/run.sh)
 ```
 
+By default it installs to `./bin` under your current working directory when run this way.
+
 Run via `go run` from GitHub:
 
 ```bash

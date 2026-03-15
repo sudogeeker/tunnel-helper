@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$PWD"
 BIN_NAME="xfrmgen"
 BIN_DIR="${BIN_DIR:-$ROOT_DIR/bin}"
 
@@ -21,42 +21,28 @@ case "$ARCH" in
     ;;
 esac
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "curl is required."
-  exit 1
-fi
+command -v curl >/dev/null 2>&1 || { echo "curl is required."; exit 1; }
+command -v tar  >/dev/null 2>&1 || { echo "tar is required."; exit 1; }
 
-if ! command -v tar >/dev/null 2>&1; then
-  echo "tar is required."
-  exit 1
-fi
-
-REPO="${REPO:-sudogeeker/go-xfrm}"
-if [[ -z "$REPO" ]]; then
-  if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    origin="$(git -C "$ROOT_DIR" config --get remote.origin.url || true)"
-    if [[ "$origin" =~ github\.com[:/]+([^/]+/[^/]+?)(\.git)?$ ]]; then
-      REPO="${BASH_REMATCH[1]}"
-    fi
-  fi
-fi
-
-if [[ -z "$REPO" ]]; then
-  echo "Could not determine GitHub repo. Set REPO=owner/repo and re-run."
-  exit 1
-fi
-
+REPO="sudogeeker/go-xfrm"
 API="https://api.github.com/repos/${REPO}/releases/latest"
+
 AUTH_HEADERS=()
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   AUTH_HEADERS=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
-json="$(curl -fsSL "${AUTH_HEADERS[@]}" "$API")"
-asset_url="$(echo "$json" | grep -Eo 'https://[^"]+linux_'"$ARCH"'\\.tar\\.gz' | head -n1)"
+if ! json="$(curl -fsSL "${AUTH_HEADERS[@]}" "$API")"; then
+  echo "Failed to fetch release metadata from ${REPO}."
+  exit 1
+fi
+
+asset_url="$(printf '%s\n' "$json" | awk -v arch="$ARCH" -F '\"' '/browser_download_url/ && $0 ~ "linux_"arch"\\.tar\\.gz" {print $4; exit}')"
 
 if [[ -z "$asset_url" ]]; then
   echo "Could not find a linux_${ARCH} release asset for ${REPO}."
+  echo "Available assets:"
+  printf '%s\n' "$json" | awk -F '\"' '/browser_download_url/ {print $4}' || true
   exit 1
 fi
 
