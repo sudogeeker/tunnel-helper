@@ -56,6 +56,7 @@ type Config struct {
 	IkeAlg           string
 	EspAlg           string
 	Encap            bool
+	StartAction      string
 	ConfDir          string
 	SwanctlDir       string
 	IfaceDir         string
@@ -449,6 +450,16 @@ func collectInputs(cfg *Config, uiOut *ui.UI, prompter *ui.Prompter) error {
 		return err
 	}
 	cfg.Encap = encap
+
+	startAction := "trap"
+	initiate, err := askConfirm(prompter, "Actively initiate IKE (start_action = start)?", false)
+	if err != nil {
+		return err
+	}
+	if initiate {
+		startAction = "start"
+	}
+	cfg.StartAction = startAction
 
 	return nil
 }
@@ -1217,6 +1228,7 @@ func buildConn(cfg *Config) string {
 	fmt.Fprintf(&b, "# Inner: %s\n\n", cfg.InnerCIDR)
 	b.WriteString("connections {\n")
 	fmt.Fprintf(&b, "    %s {\n", cfg.Name)
+	b.WriteString("        unique = never\n")
 	b.WriteString("        version = 2\n")
 	fmt.Fprintf(&b, "        local_addrs = %s\n", cfg.LocalUnder)
 	fmt.Fprintf(&b, "        remote_addrs = %s\n\n", cfg.RemoteUnder)
@@ -1249,19 +1261,23 @@ func buildConn(cfg *Config) string {
 	b.WriteString("                remote_ts = 0.0.0.0/0,::/0\n\n")
 	fmt.Fprintf(&b, "                if_id_in = %d\n", cfg.IfID)
 	fmt.Fprintf(&b, "                if_id_out = %d\n\n", cfg.IfID)
-	b.WriteString("                start_action = start\n")
+	startAction := cfg.StartAction
+	if strings.TrimSpace(startAction) == "" {
+		startAction = "trap"
+	}
+	fmt.Fprintf(&b, "                start_action = %s\n", startAction)
 	b.WriteString("                close_action = trap\n\n")
 	fmt.Fprintf(&b, "                esp_proposals = %s\n", cfg.EspAlg)
 	b.WriteString("                rekey_time = 8h\n")
 	b.WriteString("                life_time = 10h\n")
-	b.WriteString("                dpd_action = restart\n")
+	b.WriteString("                dpd_action = clear\n")
 	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
 	fmt.Fprintf(&b, "        proposals = %s\n", cfg.IkeAlg)
 	b.WriteString("        rekey_time = 1h\n")
 	b.WriteString("        over_time = 90m\n")
-	b.WriteString("        dpd_delay = 30s\n")
-	b.WriteString("        dpd_timeout = 150s\n")
+	b.WriteString("        dpd_delay = 60s\n")
+	b.WriteString("        dpd_timeout = 300s\n")
 	b.WriteString("    }\n")
 	b.WriteString("}\n")
 	return b.String()
@@ -1344,6 +1360,12 @@ func printConfigSummary(cfg *Config, uiOut *ui.UI) {
 	fmt.Fprintf(uiOut.Out, "IKE proposal: %s\n", cfg.IkeAlg)
 	fmt.Fprintf(uiOut.Out, "ESP proposal: %s\n", cfg.EspAlg)
 	fmt.Fprintf(uiOut.Out, "Encap: %s\n", encap)
+	startAction := cfg.StartAction
+	if strings.TrimSpace(startAction) == "" {
+		startAction = "trap"
+	}
+	fmt.Fprintf(uiOut.Out, "Start action: %s\n", startAction)
+	fmt.Fprintf(uiOut.Out, "DPD: delay 60s timeout 300s action clear\n")
 	if cfg.AuthMethod == AuthPSK {
 		fmt.Fprintf(uiOut.Out, "PSK: %s\n", pskNote)
 	} else {
