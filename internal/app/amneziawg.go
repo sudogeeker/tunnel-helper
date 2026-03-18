@@ -269,10 +269,17 @@ func installAmneziaWG(uiOut *ui.UI) error {
 	sys.Run("apt", "update")
 
 	uiOut.Info("Installing build dependencies...")
-	deps := []string{"build-essential", "git", "make", "linux-headers-" + unameR}
+	deps := []string{"build-essential", "git", "make"}
 	args := append([]string{"install", "-y"}, deps...)
 	if err := sys.Run("apt", args...); err != nil {
 		return fmt.Errorf("failed to install build dependencies: %w", err)
+	}
+
+	uiOut.Info("Attempting to install linux-headers for current kernel...")
+	if err := sys.Run("apt", "install", "-y", "linux-headers-"+unameR); err != nil {
+		uiOut.Warn(fmt.Sprintf("Could not install linux-headers-%s. Kernel module compilation might fail.", unameR))
+		uiOut.Info("Attempting fallback: installing linux-headers-amd64 and linux-headers-generic...")
+		sys.Run("apt", "install", "-y", "linux-headers-amd64", "linux-headers-generic")
 	}
 
 	// Install Kernel Module
