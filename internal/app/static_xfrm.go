@@ -25,6 +25,7 @@ type StaticXfrmConfig struct {
 	InnerCIDR   string
 	IfaceDir    string
 	IfaceFile   string
+	MTU         string
 
 	// Manual Keying (Directional)
 	SpiIn      string
@@ -154,6 +155,21 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 		}
 		cfg.InnerCIDR = inner
 	}
+
+	// MTU
+	mtu := "1400"
+	if err := askInput(prompter, "Interface MTU (default 1400)", &mtu, func(v string) error {
+		if v != "" && !isDigits(v) {
+			return errors.New("must be a number")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if mtu == "" {
+		mtu = "1400"
+	}
+	cfg.MTU = mtu
 
 	// SPIs
 	genSpi, err := askConfirm(prompter, "Generate new SPI pair?", true)
@@ -307,12 +323,7 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 	} else {
 		fmt.Fprintf(&b, "iface %s inet manual\n", cfg.XfrmIf)
 	}
-
-	// pre-up: load modules
-	fmt.Fprintf(&b, "    pre-up  modprobe esp4 2>/dev/null || true\n")
-	fmt.Fprintf(&b, "    pre-up  modprobe esp6 2>/dev/null || true\n")
-	fmt.Fprintf(&b, "    pre-up  modprobe xfrm_user 2>/dev/null || true\n")
-	fmt.Fprintf(&b, "    pre-up  modprobe rfc4106 2>/dev/null || true\n")
+	fmt.Fprintf(&b, "    mtu %s\n", cfg.MTU)
 
 	// pre-up: create link
 	fmt.Fprintf(&b, "    pre-up  ip link add %s type xfrm dev %s if_id %d || true\n", cfg.XfrmIf, cfg.Device, cfg.IfID)
@@ -339,6 +350,11 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src 0.0.0.0/0 dst 0.0.0.0/0 dir in tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
 		cfg.RemoteUnder, cfg.LocalUnder, cfg.IfID, cfg.IfID)
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src ::/0 dst ::/0 dir in tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
+		cfg.RemoteUnder, cfg.LocalUnder, cfg.IfID, cfg.IfID)
+
+	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src 0.0.0.0/0 dst 0.0.0.0/0 dir fwd tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
+		cfg.RemoteUnder, cfg.LocalUnder, cfg.IfID, cfg.IfID)
+	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src ::/0 dst ::/0 dir fwd tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
 		cfg.RemoteUnder, cfg.LocalUnder, cfg.IfID, cfg.IfID)
 
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src 0.0.0.0/0 dst 0.0.0.0/0 dir out tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
