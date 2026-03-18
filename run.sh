@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN_NAME="xfrmgen"
+BIN_NAME="tunnel-helper"
 
 OS="$(uname -s)"
 if [[ "$OS" != "Linux" ]]; then
@@ -22,7 +22,7 @@ esac
 command -v curl >/dev/null 2>&1 || { echo "curl is required."; exit 1; }
 command -v tar  >/dev/null 2>&1 || { echo "tar is required."; exit 1; }
 
-REPO="sudogeeker/go-xfrm"
+REPO="sudogeeker/tunnel-helper"
 API="https://api.github.com/repos/${REPO}/releases/latest"
 
 AUTH_HEADERS=()

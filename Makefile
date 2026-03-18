@@ -1,4 +1,4 @@
-APP_NAME := xfrmgen
+APP_NAME := tunnel-helper
 CMD_DIR := ./cmd/$(APP_NAME)
 BIN_DIR := ./bin
 BIN := $(BIN_DIR)/$(APP_NAME)

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sudogeeker/go-xfrm/internal/app"
+	"github.com/sudogeeker/tunnel-helper/internal/app"
 )
 
 func main() {

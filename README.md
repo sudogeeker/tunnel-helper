@@ -1,11 +1,30 @@
-# go-xfrm
+# tunnel-helper
+
+A small interactive generator for XFRM interface + strongSwan (swanctl) configs.
+It helps you build a site-to-site IPsec/IKEv2 tunnel with modern crypto defaults,
+plus an option for PSK or RPK (raw public key) authentication.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Requirements](#requirements)
+- [Build and Run](#build-and-run)
+- [Configuration Details](#configuration-details)
+  - [What It Generates](#what-it-generates)
+  - [Authentication Options](#authentication-options)
+  - [Key Exchange & Algorithms](#key-exchange--algorithms)
+- [Apply and Connect](#apply-and-connect)
+- [Security Notes](#security-notes)
+- [License](#license)
+
+---
 
 ## Quick Start
 
 Run from GitHub (no clone, downloads latest release and runs):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/sudogeeker/go-xfrm/main/run.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/sudogeeker/tunnel-helper/main/run.sh)
 ```
 
 By default it installs to `./bin` under your current working directory when run this way.
@@ -13,7 +32,7 @@ By default it installs to `./bin` under your current working directory when run 
 Run via `go run` from GitHub:
 
 ```bash
-sudo go run github.com/sudogeeker/go-xfrm/cmd/xfrmgen@latest
+sudo go run github.com/sudogeeker/tunnel-helper/cmd/tunnel-helper@latest
 ```
 
 Run locally after cloning:
@@ -21,27 +40,6 @@ Run locally after cloning:
 ```bash
 ./run.sh
 ```
-
-A small interactive generator for XFRM interface + strongSwan (swanctl) configs.
-It helps you build a site-to-site IPsec/IKEv2 tunnel with modern crypto defaults,
-plus an option for PSK or RPK (raw public key) authentication.
-
-This README is a tutorial: follow it top to bottom once, then reuse the quick steps.
-
----
-
-## What It Generates
-
-The tool writes three files:
-
-- `swanctl` connection config: `/etc/swanctl/conf.d/<ifname>.conf`
-- `swanctl` secrets config: `/etc/swanctl/conf.d/<ifname>.secrets` (PSK only)
-- XFRM interface config: `/etc/network/interfaces.d/<ifname>.cfg`
-
-It also ensures:
-
-- `/etc/swanctl/swanctl.conf` includes `conf.d/*.conf` and `conf.d/*.secrets`
-- `/etc/network/interfaces` sources `/etc/network/interfaces.d/*`
 
 ---
 
@@ -52,7 +50,7 @@ It also ensures:
 - strongSwan + swanctl installed
 - `ip` command available
 - ifupdown networking (`/etc/network/interfaces`) is required
-  netplan or systemd-networkd are not supported by this tool
+  *(netplan or systemd-networkd are not supported by this tool)*
 
 Recommended packages on Debian/Ubuntu:
 
@@ -65,20 +63,20 @@ Recommended packages on Debian/Ubuntu:
 
 ---
 
-## Build
+## Build and Run
 
-```
+### Build
+
+```bash
 make build
 ```
 
-Binary is written to `./bin/xfrmgen`.
+Binary is written to `./bin/tunnel-helper`.
 
----
+### Run
 
-## Run
-
-```
-sudo ./bin/xfrmgen
+```bash
+sudo ./bin/tunnel-helper
 ```
 
 The wizard will prompt you for:
@@ -100,73 +98,60 @@ After collection, the tool prints a full configuration summary.
 
 ---
 
-## Authentication Options
+## Configuration Details
 
-### 1) PSK (Pre-Shared Key)
+### What It Generates
+
+The tool writes three files:
+
+- `swanctl` connection config: `/etc/swanctl/conf.d/<ifname>.conf`
+- `swanctl` secrets config: `/etc/swanctl/conf.d/<ifname>.secrets` (PSK only)
+- XFRM interface config: `/etc/network/interfaces.d/<ifname>.cfg`
+
+It also ensures:
+
+- `/etc/swanctl/swanctl.conf` includes `conf.d/*.conf` and `conf.d/*.secrets`
+- `/etc/network/interfaces` sources `/etc/network/interfaces.d/*`
+
+### Authentication Options
+
+#### 1) PSK (Pre-Shared Key)
 
 - Simple and quick.
 - Best for small, fixed pairs.
 - The tool can auto-generate a high-entropy PSK.
 
-### 2) RPK (Raw Public Key)
+#### 2) RPK (Raw Public Key)
 
 - Similar to WireGuard-style static public keys.
 - No certificates or expiry.
 - You must exchange public keys between peers.
 
-The tool will:
-
-1. Generate a local keypair if needed.
-2. Print a base64 DER public key for copy/paste.
-3. Ask you to paste the peer's public key (base64 DER or a file path).
-4. Write the peer pubkey into `/etc/swanctl/pubkey`.
-
----
-
-## RPK: Copy/Paste Workflow (Two Sides)
-
+**RPK: Copy/Paste Workflow (Two Sides)**
 On **both** sides, run the tool and select `RPK`.
 
 1. Each side prints a `Local RPK public key (base64 DER)`.
 2. Copy that string and paste into the other side when prompted.
 3. Complete the remaining prompts.
+4. The tool will write the peer pubkey into `/etc/swanctl/pubkey`.
 
 Result: each side has its own private key and the peer's public key.
 
----
+### Key Exchange & Algorithms
 
-## Key Exchange (IKE DH Group)
-
-The tool runs `swanctl --list-algs` and parses the **key exchange** section.
-It then offers only **strong** groups if available:
-
-- `CURVE_25519`
-- `CURVE_448`
-- `ECP_384`
-- `ECP_521`
-- `MODP_4096`
-- `MODP_3072`
-
+**Key Exchange (IKE DH Group)**
+The tool runs `swanctl --list-algs` and parses the **key exchange** section. It then offers only **strong** groups if available:
+`CURVE_25519`, `CURVE_448`, `ECP_384`, `ECP_521`, `MODP_4096`, `MODP_3072`.
 If detection fails, it falls back to a safe default list.
 
----
-
-## RPK Key Algorithm Selection
-
+**RPK Key Algorithm Selection**
 When using RPK, you can choose:
-
 - ECDSA P-384 (recommended)
 - ECDSA P-256
 - ECDSA P-521
 - Ed25519 (only shown if supported by your local `pki` backend)
 
-Ed25519 availability is checked by running:
-
-```
-pki --gen --type ed25519 --outform der
-```
-
-If that command fails, Ed25519 is hidden from the menu.
+Ed25519 availability is checked by running `pki --gen --type ed25519 --outform der`. If that command fails, Ed25519 is hidden from the menu.
 
 ---
 
@@ -174,7 +159,7 @@ If that command fails, Ed25519 is hidden from the menu.
 
 Load configs, then bring up the interface and tunnel:
 
-```
+```bash
 systemctl enable --now strongswan
 swanctl --load-all
 ifup ipsec-<name>
@@ -182,7 +167,7 @@ ifup ipsec-<name>
 
 Verify:
 
-```
+```bash
 swanctl --list-conns
 swanctl --list-sas
 ip link show ipsec-<name>
@@ -191,7 +176,7 @@ ip addr show ipsec-<name>
 
 If you want to manually initiate:
 
-```
+```bash
 swanctl --initiate --child <name>-child
 ```
 

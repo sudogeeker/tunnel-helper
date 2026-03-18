@@ -1,4 +1,4 @@
-module github.com/sudogeeker/go-xfrm
+module github.com/sudogeeker/tunnel-helper
 
 go 1.22
 
