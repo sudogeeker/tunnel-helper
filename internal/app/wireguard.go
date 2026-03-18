@@ -79,12 +79,22 @@ func runWireguard(uiOut *ui.UI, prompter *ui.Prompter) error {
 		}
 	}
 
-	uiOut.Info("Inner address configuration - leave blank to skip")
-	inner := "fd00:cafe::0/127"
-	if err := askInput(prompter, "Local inner address/CIDR (blank = no inner address)", &inner, nil); err != nil {
-		return err
+	insideEnv := strings.TrimSpace(os.Getenv("TUNNEL_INSIDE_ADDR"))
+	if insideEnv != "" {
+		innerCIDR, _, err := parseTunnelInsideAddrEnv(insideEnv)
+		if err != nil {
+			return err
+		}
+		cfg.InnerCIDR = innerCIDR
+		uiOut.Info("Inner address from TUNNEL_INSIDE_ADDR: " + cfg.InnerCIDR)
+	} else {
+		uiOut.Info("Inner address configuration - leave blank to skip")
+		inner := "fd00:cafe::0/127"
+		if err := askInput(prompter, "Local inner address/CIDR (blank = no inner address)", &inner, nil); err != nil {
+			return err
+		}
+		cfg.InnerCIDR = strings.TrimSpace(inner)
 	}
-	cfg.InnerCIDR = strings.TrimSpace(inner)
 
 	if cfg.InnerCIDR != "" {
 		if strings.Contains(cfg.InnerCIDR, ",") {

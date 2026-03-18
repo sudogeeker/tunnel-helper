@@ -308,15 +308,15 @@ func collectXfrmInputs(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) err
 		}
 	}
 
-	insideEnv := strings.TrimSpace(os.Getenv("XFRM_INSIDE_ADDR"))
+	insideEnv := strings.TrimSpace(os.Getenv("TUNNEL_INSIDE_ADDR"))
 	if insideEnv != "" {
-		innerCIDR, innerFam, err := parseInsideAddrEnv(insideEnv)
+		innerCIDR, innerFam, err := parseTunnelInsideAddrEnv(insideEnv)
 		if err != nil {
 			return err
 		}
 		cfg.InnerFam = innerFam
 		cfg.InnerCIDR = innerCIDR
-		uiOut.Info("Inner address from XFRM_INSIDE_ADDR: " + cfg.InnerCIDR)
+		uiOut.Info("Inner address from TUNNEL_INSIDE_ADDR: " + cfg.InnerCIDR)
 	} else {
 		if err := askSelect(prompter, "Inner IP version", []ui.Option{
 			{Label: "IPv4", Value: "4"},

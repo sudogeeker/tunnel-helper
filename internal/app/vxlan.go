@@ -82,18 +82,29 @@ func runVXLAN(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 	cfg.LocalUnder = local
 
-	if err := askSelect(prompter, "Inner IP version", []ui.Option{
-		{Label: "IPv4", Value: "4"},
-		{Label: "IPv6", Value: "6"},
-	}, &cfg.InnerFam, "4"); err != nil {
-		return err
-	}
+	insideEnv := strings.TrimSpace(os.Getenv("TUNNEL_INSIDE_ADDR"))
+	if insideEnv != "" {
+		innerCIDR, innerFam, err := parseTunnelInsideAddrEnv(insideEnv)
+		if err != nil {
+			return err
+		}
+		cfg.InnerFam = innerFam
+		cfg.InnerCIDR = innerCIDR
+		uiOut.Info("Inner address from TUNNEL_INSIDE_ADDR: " + cfg.InnerCIDR)
+	} else {
+		if err := askSelect(prompter, "Inner IP version", []ui.Option{
+			{Label: "IPv4", Value: "4"},
+			{Label: "IPv6", Value: "6"},
+		}, &cfg.InnerFam, "4"); err != nil {
+			return err
+		}
 
-	inner := ""
-	if err := askInput(prompter, "Inner local address/CIDR", &inner, validateCIDR(cfg.InnerFam)); err != nil {
-		return err
+		inner := ""
+		if err := askInput(prompter, "Inner local address/CIDR", &inner, validateCIDR(cfg.InnerFam)); err != nil {
+			return err
+		}
+		cfg.InnerCIDR = inner
 	}
-	cfg.InnerCIDR = inner
 
 	cfg.IfaceFile = filepath.Join(cfg.IfaceDir, cfg.Name+".cfg")
 

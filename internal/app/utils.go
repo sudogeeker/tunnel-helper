@@ -268,15 +268,15 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func parseInsideAddrEnv(value string) (string, int, error) {
+func parseTunnelInsideAddrEnv(value string) (string, int, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", 0, errors.New("XFRM_INSIDE_ADDR is empty")
+		return "", 0, errors.New("TUNNEL_INSIDE_ADDR is empty")
 	}
 	if strings.Contains(value, "/") {
 		ip, ipNet, err := net.ParseCIDR(value)
 		if err != nil {
-			return "", 0, fmt.Errorf("invalid XFRM_INSIDE_ADDR CIDR: %s", value)
+			return "", 0, fmt.Errorf("invalid TUNNEL_INSIDE_ADDR CIDR: %s", value)
 		}
 		ones, _ := ipNet.Mask.Size()
 		if ip.To4() != nil {
@@ -286,7 +286,7 @@ func parseInsideAddrEnv(value string) (string, int, error) {
 	}
 	ip := net.ParseIP(value)
 	if ip == nil {
-		return "", 0, fmt.Errorf("invalid XFRM_INSIDE_ADDR IP: %s", value)
+		return "", 0, fmt.Errorf("invalid TUNNEL_INSIDE_ADDR IP: %s", value)
 	}
 	if ip.To4() != nil {
 		return ip.To4().String() + "/32", 4, nil
