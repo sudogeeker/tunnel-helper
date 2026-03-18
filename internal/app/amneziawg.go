@@ -52,7 +52,7 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 			return err
 		}
 		if ok {
-			if err := installAmneziaWG(uiOut); err != nil {
+			if err := installAmneziaWG(uiOut, prompter); err != nil {
 				return fmt.Errorf("failed to install AmneziaWG: %w", err)
 			}
 			uiOut.Ok("AmneziaWG installed")
@@ -254,7 +254,7 @@ func askDefault(prompter *ui.Prompter, title, def string) string {
 	return val
 }
 
-func installAmneziaWG(uiOut *ui.UI) error {
+func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	if !sys.LookPath("apt") {
 		return errors.New("apt not found; install manually")
 	}
@@ -276,10 +276,33 @@ func installAmneziaWG(uiOut *ui.UI) error {
 	}
 
 	uiOut.Info("Attempting to install linux-headers for current kernel...")
-	if err := sys.Run("apt", "install", "-y", "linux-headers-"+unameR); err != nil {
-		uiOut.Warn(fmt.Sprintf("Could not install linux-headers-%s. Kernel module compilation might fail.", unameR))
-		uiOut.Info("Attempting fallback: installing linux-headers-amd64 and linux-headers-generic...")
-		sys.Run("apt", "install", "-y", "linux-headers-amd64", "linux-headers-generic")
+
+	// Check if headers might already be present
+	buildDir := "/lib/modules/" + unameR + "/build"
+	if _, err := os.Stat(buildDir); err == nil {
+		uiOut.Ok(fmt.Sprintf("Found existing kernel build directory at %s", buildDir))
+		uiOut.Info("Skipping linux-headers package installation.")
+	} else {
+		if err := sys.Run("apt", "install", "-y", "linux-headers-"+unameR); err != nil {
+			uiOut.Warn(fmt.Sprintf("Could not install linux-headers-%s.", unameR))
+			uiOut.Info("Attempting fallback: installing linux-headers-amd64 and linux-headers-generic...")
+			if errFallback := sys.Run("apt", "install", "-y", "linux-headers-amd64", "linux-headers-generic"); errFallback != nil {
+				uiOut.Warn("Fallback linux-headers installation failed.")
+			}
+
+			// Final check before complaining
+			if _, errCheck := os.Stat(buildDir); errCheck != nil {
+				uiOut.Warn("Could not locate kernel headers. If you are using a custom/mainline kernel (e.g. from a cloud provider),")
+				uiOut.Warn("the kernel module compilation will likely fail without the correct headers.")
+				ok, errAsk := askConfirm(prompter, "Continue with kernel module compilation anyway?", false)
+				if errAsk != nil {
+					return errAsk
+				}
+				if !ok {
+					return errors.New("aborted by user due to missing linux-headers")
+				}
+			}
+		}
 	}
 
 	// Install Kernel Module
