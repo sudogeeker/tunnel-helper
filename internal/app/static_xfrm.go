@@ -26,12 +26,14 @@ type StaticXfrmConfig struct {
 	IfaceDir    string
 	IfaceFile   string
 
-	// Manual Keying
-	SpiIn   string
-	SpiOut  string
-	EncKey  string // 32 chars for aes128 (16 bytes) or 64 for aes256 (32 bytes)
-	AuthKey string // 40 chars for sha1 (20 bytes) or 64 for sha256 (32 bytes)
-	Algo    string // aes-gcm or aes-cbc+hmac-sha256
+	// Manual Keying (Directional)
+	SpiIn      string
+	SpiOut     string
+	EncKeyIn   string
+	EncKeyOut  string
+	AuthKeyIn  string
+	AuthKeyOut string
+	Algo       string
 }
 
 func runStaticXFRM(uiOut *ui.UI, prompter *ui.Prompter) error {
@@ -154,7 +156,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 	}
 
 	// SPIs
-	genSpi, err := askConfirm(prompter, "Generate new SPI pair? (Select 'No' if you are pasting from the other side)", true)
+	genSpi, err := askConfirm(prompter, "Generate new SPI pair?", true)
 	if err != nil {
 		return err
 	}
@@ -164,26 +166,25 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 		s2 := fmt.Sprintf("0x%x", cfg.IfID+0x2000)
 		cfg.SpiIn = s1
 		cfg.SpiOut = s2
-		uiOut.Ok(fmt.Sprintf("Generated SPI Pair: %s,%s", s1, s2))
-		uiOut.Dim("Please copy the string above and paste it on the remote side.")
+		uiOut.Ok(fmt.Sprintf("Generated SPI Pair (IN,OUT): %s,%s", s1, s2))
 	} else {
 		spiInput := ""
-		if err := askInput(prompter, "Paste SPI pair from remote (e.g. 0x1111,0x2222)", &spiInput, func(v string) error {
-			parts := strings.Split(v, ",")
-			if len(parts) != 2 {
-				return errors.New("must provide two SPIs separated by comma")
+		if err := askInput(prompter, "Paste SPI pair from remote (e.g. IN,OUT)", &spiInput, func(v string) error {
+			if !strings.Contains(v, ",") {
+				return errors.New("format: SPI_IN,SPI_OUT")
 			}
 			return nil
 		}); err != nil {
 			return err
 		}
 		parts := strings.Split(spiInput, ",")
-		cfg.SpiIn = parts[1]
-		cfg.SpiOut = parts[0]
-		uiOut.Info(fmt.Sprintf("Reversed SPIs for receiver: IN=%s, OUT=%s", cfg.SpiIn, cfg.SpiOut))
+		// Auto reverse
+		cfg.SpiIn = strings.TrimSpace(parts[1])
+		cfg.SpiOut = strings.TrimSpace(parts[0])
+		uiOut.Info(fmt.Sprintf("Reversed SPIs: IN=%s, OUT=%s", cfg.SpiIn, cfg.SpiOut))
 	}
 
-	// Algo and Keys
+	// Algo Choice
 	algoChoice := "1"
 	if err := askSelectRaw(prompter, "Algorithm Profile", []ui.Option{
 		{Label: "1) aes-gcm (128-bit) - Recommended", Value: "1"},
@@ -192,44 +193,75 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 		return err
 	}
 
-	genKeys, err := askConfirm(prompter, "Generate new Encryption Keys?", true)
+	genKeys, err := askConfirm(prompter, "Generate new Key pair?", true)
 	if err != nil {
 		return err
 	}
 
 	if algoChoice == "1" {
 		cfg.Algo = "aes-gcm"
-		key := ""
+		keyInput := ""
 		if genKeys {
-			key, _ = generateRandomHex(20)
-			uiOut.Ok("Generated GCM Key: " + key)
-			uiOut.Dim("Please copy the key above to the remote side.")
+			k1, _ := generateRandomHex(20)
+			k2, _ := generateRandomHex(20)
+			keyInput = k1 + "," + k2
+			uiOut.Ok("Generated Key Pair (IN,OUT): " + keyInput)
 		}
-		if err := askInput(prompter, "Encryption Key (hex, 40 chars)", &key, validateHexLen(40)); err != nil {
+		if err := askInput(prompter, "Paste Key Pair (e.g. K1,K2)", &keyInput, func(v string) error {
+			if !strings.Contains(v, ",") {
+				return errors.New("format: KEY_IN,KEY_OUT")
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
-		cfg.EncKey = key
+		parts := strings.Split(keyInput, ",")
+		if genKeys {
+			cfg.EncKeyIn = strings.TrimSpace(parts[0])
+			cfg.EncKeyOut = strings.TrimSpace(parts[1])
+		} else {
+			// Reverse for pasting
+			cfg.EncKeyIn = strings.TrimSpace(parts[1])
+			cfg.EncKeyOut = strings.TrimSpace(parts[0])
+			uiOut.Info("Keys reversed for receiver side.")
+		}
 	} else {
 		cfg.Algo = "aes-cbc-sha256"
-		encKey := ""
-		authKey := ""
+		// This needs two sets of keys (Enc and Auth)
+		// For simplicity, we ask for Enc Pair and Auth Pair separately
+		encPair := ""
 		if genKeys {
-			encKey, _ = generateRandomHex(32)
-			authKey, _ = generateRandomHex(32)
-			uiOut.Ok("Generated Enc Key: " + encKey)
-			uiOut.Ok("Generated Auth Key: " + authKey)
-			uiOut.Dim("Please copy the keys above to the remote side.")
+			k1, _ := generateRandomHex(32)
+			k2, _ := generateRandomHex(32)
+			encPair = k1 + "," + k2
+			uiOut.Ok("Generated Enc Key Pair: " + encPair)
+		}
+		askInput(prompter, "Paste Enc Key Pair", &encPair, nil)
+		parts := strings.Split(encPair, ",")
+		if genKeys {
+			cfg.EncKeyIn = strings.TrimSpace(parts[0])
+			cfg.EncKeyOut = strings.TrimSpace(parts[1])
+		} else {
+			cfg.EncKeyIn = strings.TrimSpace(parts[1])
+			cfg.EncKeyOut = strings.TrimSpace(parts[0])
 		}
 
-		if err := askInput(prompter, "Encryption Key (hex, 64 chars)", &encKey, validateHexLen(64)); err != nil {
-			return err
+		authPair := ""
+		if genKeys {
+			k1, _ := generateRandomHex(32)
+			k2, _ := generateRandomHex(32)
+			authPair = k1 + "," + k2
+			uiOut.Ok("Generated Auth Key Pair: " + authPair)
 		}
-		cfg.EncKey = encKey
-
-		if err := askInput(prompter, "Authentication Key (hex, 64 chars)", &authKey, validateHexLen(64)); err != nil {
-			return err
+		askInput(prompter, "Paste Auth Key Pair", &authPair, nil)
+		partsAuth := strings.Split(authPair, ",")
+		if genKeys {
+			cfg.AuthKeyIn = strings.TrimSpace(partsAuth[0])
+			cfg.AuthKeyOut = strings.TrimSpace(partsAuth[1])
+		} else {
+			cfg.AuthKeyIn = strings.TrimSpace(partsAuth[1])
+			cfg.AuthKeyOut = strings.TrimSpace(partsAuth[0])
 		}
-		cfg.AuthKey = authKey
 	}
 
 	return nil
@@ -276,25 +308,31 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 		fmt.Fprintf(&b, "iface %s inet manual\n", cfg.XfrmIf)
 	}
 
+	// pre-up: load modules
+	fmt.Fprintf(&b, "    pre-up  modprobe esp4 2>/dev/null || true\n")
+	fmt.Fprintf(&b, "    pre-up  modprobe esp6 2>/dev/null || true\n")
+	fmt.Fprintf(&b, "    pre-up  modprobe xfrm_user 2>/dev/null || true\n")
+	fmt.Fprintf(&b, "    pre-up  modprobe rfc4106 2>/dev/null || true\n")
+
 	// pre-up: create link
 	fmt.Fprintf(&b, "    pre-up  ip link add %s type xfrm dev %s if_id %d || true\n", cfg.XfrmIf, cfg.Device, cfg.IfID)
 	fmt.Fprintf(&b, "    pre-up  ip link set %s up\n", cfg.XfrmIf)
 
-	// pre-up: add XFRM states (Manual Keying)
+	// pre-up: add XFRM states (Manual Keying with Directional Keys)
 	if cfg.Algo == "aes-gcm" {
-		// IN: remote -> local
-		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel aead 'rfc4106(aes)' 0x%s 128 if_id %d || true\n",
-			cfg.RemoteUnder, cfg.LocalUnder, cfg.SpiIn, cfg.IfID, cfg.EncKey, cfg.IfID)
-		// OUT: local -> remote
-		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel aead 'rfc4106(aes)' 0x%s 128 if_id %d || true\n",
-			cfg.LocalUnder, cfg.RemoteUnder, cfg.SpiOut, cfg.IfID, cfg.EncKey, cfg.IfID)
+		// IN: remote -> local (use EncKeyIn)
+		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel aead 'rfc4106(gcm(aes))' 0x%s 128 if_id %d || true\n",
+			cfg.RemoteUnder, cfg.LocalUnder, cfg.SpiIn, cfg.IfID, cfg.EncKeyIn, cfg.IfID)
+		// OUT: local -> remote (use EncKeyOut)
+		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel aead 'rfc4106(gcm(aes))' 0x%s 128 if_id %d || true\n",
+			cfg.LocalUnder, cfg.RemoteUnder, cfg.SpiOut, cfg.IfID, cfg.EncKeyOut, cfg.IfID)
 	} else {
 		// IN
 		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel enc 'cbc(aes)' 0x%s auth 'hmac(sha256)' 0x%s if_id %d || true\n",
-			cfg.RemoteUnder, cfg.LocalUnder, cfg.SpiIn, cfg.IfID, cfg.EncKey, cfg.AuthKey, cfg.IfID)
+			cfg.RemoteUnder, cfg.LocalUnder, cfg.SpiIn, cfg.IfID, cfg.EncKeyIn, cfg.AuthKeyIn, cfg.IfID)
 		// OUT
 		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel enc 'cbc(aes)' 0x%s auth 'hmac(sha256)' 0x%s if_id %d || true\n",
-			cfg.LocalUnder, cfg.RemoteUnder, cfg.SpiOut, cfg.IfID, cfg.EncKey, cfg.AuthKey, cfg.IfID)
+			cfg.LocalUnder, cfg.RemoteUnder, cfg.SpiOut, cfg.IfID, cfg.EncKeyOut, cfg.AuthKeyOut, cfg.IfID)
 	}
 
 	// pre-up: add XFRM policies
@@ -332,15 +370,17 @@ func printStaticXfrmNextSteps(cfg *StaticXfrmConfig, uiOut *ui.UI) {
 	fmt.Fprintf(uiOut.Out, "  Interface: %s (if_id=%d)\n", cfg.XfrmIf, cfg.IfID)
 	fmt.Fprintf(uiOut.Out, "  SPI IN: %s, SPI OUT: %s\n", cfg.SpiIn, cfg.SpiOut)
 	fmt.Fprintf(uiOut.Out, "  Algo: %s\n", cfg.Algo)
-	fmt.Fprintf(uiOut.Out, "  Enc Key: %s\n", cfg.EncKey)
-	if cfg.AuthKey != "" {
-		fmt.Fprintf(uiOut.Out, "  Auth Key: %s\n", cfg.AuthKey)
+	fmt.Fprintf(uiOut.Out, "  Enc Key IN:  %s\n", cfg.EncKeyIn)
+	fmt.Fprintf(uiOut.Out, "  Enc Key OUT: %s\n", cfg.EncKeyOut)
+	if cfg.AuthKeyIn != "" {
+		fmt.Fprintf(uiOut.Out, "  Auth Key IN:  %s\n", cfg.AuthKeyIn)
+		fmt.Fprintf(uiOut.Out, "  Auth Key OUT: %s\n", cfg.AuthKeyOut)
 	}
 	uiOut.HR()
 	uiOut.Warn("Remote side needs SYMMETRIC configuration:")
 	uiOut.Info("  - Swap Remote/Local underlay IPs")
-	uiOut.Info("  - Use SAME SPI Pair (program will auto-reverse)")
-	uiOut.Info("  - Use SAME Keys and Algorithm")
+	uiOut.Info("  - Use SAME SPI Pair (system will auto-reverse)")
+	uiOut.Info("  - Use SAME Key Pairs (system will auto-reverse)")
 	uiOut.Info("  - Use SAME if_id: " + fmt.Sprint(cfg.IfID))
 	uiOut.HR()
 }
