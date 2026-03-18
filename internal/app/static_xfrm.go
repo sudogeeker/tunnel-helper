@@ -95,6 +95,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 	cfg.XfrmIf = "ipsec-" + name
 	cfg.IfID = generateIfID(name)
 
+	// Underlay
 	if err := askSelect(prompter, "Underlay IP version", []ui.Option{
 		{Label: "IPv4", Value: "4"},
 		{Label: "IPv6", Value: "6"},
@@ -127,6 +128,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 	}
 	cfg.LocalUnder = local
 
+	// Inner address
 	insideEnv := strings.TrimSpace(os.Getenv("TUNNEL_INSIDE_ADDR"))
 	if insideEnv != "" {
 		innerCIDR, innerFam, err := parseTunnelInsideAddrEnv(insideEnv)
@@ -152,19 +154,36 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 	}
 
 	// SPIs
-	spiIn := "0x1000"
-	if err := askInput(prompter, "SPI IN (hex, e.g. 0x1000) - MUST match remote's SPI OUT", &spiIn, validateHex); err != nil {
+	genSpi, err := askConfirm(prompter, "Generate new SPI pair? (Select 'No' if you are pasting from the other side)", true)
+	if err != nil {
 		return err
 	}
-	cfg.SpiIn = spiIn
 
-	spiOut := "0x2000"
-	if err := askInput(prompter, "SPI OUT (hex, e.g. 0x2000) - MUST match remote's SPI IN", &spiOut, validateHex); err != nil {
-		return err
+	if genSpi {
+		s1 := fmt.Sprintf("0x%x", cfg.IfID+0x1000)
+		s2 := fmt.Sprintf("0x%x", cfg.IfID+0x2000)
+		cfg.SpiIn = s1
+		cfg.SpiOut = s2
+		uiOut.Ok(fmt.Sprintf("Generated SPI Pair: %s,%s", s1, s2))
+		uiOut.Dim("Please copy the string above and paste it on the remote side.")
+	} else {
+		spiInput := ""
+		if err := askInput(prompter, "Paste SPI pair from remote (e.g. 0x1111,0x2222)", &spiInput, func(v string) error {
+			parts := strings.Split(v, ",")
+			if len(parts) != 2 {
+				return errors.New("must provide two SPIs separated by comma")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		parts := strings.Split(spiInput, ",")
+		cfg.SpiIn = parts[1]
+		cfg.SpiOut = parts[0]
+		uiOut.Info(fmt.Sprintf("Reversed SPIs for receiver: IN=%s, OUT=%s", cfg.SpiIn, cfg.SpiOut))
 	}
-	cfg.SpiOut = spiOut
 
-	// Keys
+	// Algo and Keys
 	algoChoice := "1"
 	if err := askSelectRaw(prompter, "Algorithm Profile", []ui.Option{
 		{Label: "1) aes-gcm (128-bit) - Recommended", Value: "1"},
@@ -173,23 +192,41 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 		return err
 	}
 
+	genKeys, err := askConfirm(prompter, "Generate new Encryption Keys?", true)
+	if err != nil {
+		return err
+	}
+
 	if algoChoice == "1" {
 		cfg.Algo = "aes-gcm"
-		key, _ := generateRandomHex(16)
-		if err := askInput(prompter, "Encryption Key (hex, 32 chars) - Copy from/to remote", &key, validateHexLen(32)); err != nil {
+		key := ""
+		if genKeys {
+			key, _ = generateRandomHex(20)
+			uiOut.Ok("Generated GCM Key: " + key)
+			uiOut.Dim("Please copy the key above to the remote side.")
+		}
+		if err := askInput(prompter, "Encryption Key (hex, 40 chars)", &key, validateHexLen(40)); err != nil {
 			return err
 		}
 		cfg.EncKey = key
 	} else {
 		cfg.Algo = "aes-cbc-sha256"
-		encKey, _ := generateRandomHex(32)
-		if err := askInput(prompter, "Encryption Key (hex, 64 chars) - Copy from/to remote", &encKey, validateHexLen(64)); err != nil {
+		encKey := ""
+		authKey := ""
+		if genKeys {
+			encKey, _ = generateRandomHex(32)
+			authKey, _ = generateRandomHex(32)
+			uiOut.Ok("Generated Enc Key: " + encKey)
+			uiOut.Ok("Generated Auth Key: " + authKey)
+			uiOut.Dim("Please copy the keys above to the remote side.")
+		}
+
+		if err := askInput(prompter, "Encryption Key (hex, 64 chars)", &encKey, validateHexLen(64)); err != nil {
 			return err
 		}
 		cfg.EncKey = encKey
 
-		authKey, _ := generateRandomHex(32)
-		if err := askInput(prompter, "Authentication Key (hex, 64 chars) - Copy from/to remote", &authKey, validateHexLen(64)); err != nil {
+		if err := askInput(prompter, "Authentication Key (hex, 64 chars)", &authKey, validateHexLen(64)); err != nil {
 			return err
 		}
 		cfg.AuthKey = authKey
@@ -246,10 +283,10 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 	// pre-up: add XFRM states (Manual Keying)
 	if cfg.Algo == "aes-gcm" {
 		// IN: remote -> local
-		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel enc 'rfc4106(aes)' 0x%s 128 if_id %d || true\n",
+		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel aead 'rfc4106(aes)' 0x%s 128 if_id %d || true\n",
 			cfg.RemoteUnder, cfg.LocalUnder, cfg.SpiIn, cfg.IfID, cfg.EncKey, cfg.IfID)
 		// OUT: local -> remote
-		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel enc 'rfc4106(aes)' 0x%s 128 if_id %d || true\n",
+		fmt.Fprintf(&b, "    pre-up  ip xfrm state add src %s dst %s proto esp spi %s reqid %d mode tunnel aead 'rfc4106(aes)' 0x%s 128 if_id %d || true\n",
 			cfg.LocalUnder, cfg.RemoteUnder, cfg.SpiOut, cfg.IfID, cfg.EncKey, cfg.IfID)
 	} else {
 		// IN
@@ -261,14 +298,11 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 	}
 
 	// pre-up: add XFRM policies
-	// IN: any -> local_inner (usually 0.0.0.0/0 for policy, but here we can be specific or broad)
-	// For XFRM interface, we usually use 0.0.0.0/0 policies tied to if_id
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src 0.0.0.0/0 dst 0.0.0.0/0 dir in tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
 		cfg.RemoteUnder, cfg.LocalUnder, cfg.IfID, cfg.IfID)
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src ::/0 dst ::/0 dir in tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
 		cfg.RemoteUnder, cfg.LocalUnder, cfg.IfID, cfg.IfID)
 
-	// OUT
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src 0.0.0.0/0 dst 0.0.0.0/0 dir out tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
 		cfg.LocalUnder, cfg.RemoteUnder, cfg.IfID, cfg.IfID)
 	fmt.Fprintf(&b, "    pre-up  ip xfrm policy add src ::/0 dst ::/0 dir out tmpl src %s dst %s proto esp reqid %d mode tunnel if_id %d || true\n",
@@ -284,7 +318,7 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 	// down
 	fmt.Fprintf(&b, "    down    ip link set %s down\n", cfg.XfrmIf)
 
-	// post-down: cleanup states/policies/link
+	// post-down: cleanup
 	fmt.Fprintf(&b, "    post-down ip xfrm state flush if_id %d || true\n", cfg.IfID)
 	fmt.Fprintf(&b, "    post-down ip xfrm policy flush if_id %d || true\n", cfg.IfID)
 	fmt.Fprintf(&b, "    post-down ip link del %s 2>/dev/null || true\n", cfg.XfrmIf)
@@ -305,7 +339,7 @@ func printStaticXfrmNextSteps(cfg *StaticXfrmConfig, uiOut *ui.UI) {
 	uiOut.HR()
 	uiOut.Warn("Remote side needs SYMMETRIC configuration:")
 	uiOut.Info("  - Swap Remote/Local underlay IPs")
-	uiOut.Info("  - Swap SPI IN/OUT")
+	uiOut.Info("  - Use SAME SPI Pair (program will auto-reverse)")
 	uiOut.Info("  - Use SAME Keys and Algorithm")
 	uiOut.Info("  - Use SAME if_id: " + fmt.Sprint(cfg.IfID))
 	uiOut.HR()
