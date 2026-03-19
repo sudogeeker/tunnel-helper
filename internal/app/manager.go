@@ -340,6 +340,18 @@ func deleteTunnel(uiOut *ui.UI, t ManagedTunnel) {
 
 	// Remove files
 	files := append([]string{t.MainConfig}, t.ExtraFiles...)
+
+	// If XFRM, also try to clean up RPK keys
+	if t.Type == "XFRM" {
+		swanctlDir := "/etc/swanctl"
+		prefix := t.Name // e.g. "prod1"
+		files = append(files,
+			filepath.Join(swanctlDir, "ecdsa", prefix+"-local.key"),
+			filepath.Join(swanctlDir, "pubkey", prefix+"-local.pub"),
+			filepath.Join(swanctlDir, "pubkey", prefix+"-remote.pub"),
+		)
+	}
+
 	for _, f := range files {
 		if fileExists(f) {
 			if err := os.Remove(f); err != nil {

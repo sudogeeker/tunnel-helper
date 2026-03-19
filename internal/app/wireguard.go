@@ -159,11 +159,11 @@ func runWireguard(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	uiOut.Info("Generating WireGuard key pair...")
-	priv, err := sys.Output("wg", "genkey")
+	privBytes, err := exec.Command("wg", "genkey").Output()
 	if err != nil {
 		return fmt.Errorf("failed to generate private key: %w", err)
 	}
-	priv = strings.TrimSpace(priv)
+	priv := strings.TrimSpace(string(privBytes))
 
 	cmd := exec.Command("wg", "pubkey")
 	cmd.Stdin = strings.NewReader(priv)
@@ -184,7 +184,7 @@ func runWireguard(uiOut *ui.UI, prompter *ui.Prompter) error {
 	cfg.RemotePub = strings.TrimSpace(remotePub)
 
 	mtu := "1420"
-	if err := askInput(prompter, "MTU (blank = default 1420)", &mtu, nil); err != nil {
+	if err := askInput(prompter, "MTU (blank = default 1420)", &mtu, validateNumber); err != nil {
 		return err
 	}
 	cfg.MTU = mtu
@@ -200,7 +200,7 @@ func runWireguard(uiOut *ui.UI, prompter *ui.Prompter) error {
 		keepaliveDef = "25"
 	}
 	keepalive := keepaliveDef
-	if err := askInput(prompter, "PersistentKeepalive in seconds (0 = disable, blank = unset)", &keepalive, nil); err != nil {
+	if err := askInput(prompter, "PersistentKeepalive in seconds (0 = disable, blank = unset)", &keepalive, validateNumber); err != nil {
 		return err
 	}
 	cfg.Keepalive = keepalive
@@ -264,21 +264,26 @@ func buildWgConf(cfg *WireGuardConfig) string {
 		fmt.Fprintf(&b, "MTU = %s\n", cfg.MTU)
 	}
 
-	b.WriteString("\n[Peer]\n")
 	if cfg.RemotePub != "" {
+		b.WriteString("\n[Peer]\n")
 		fmt.Fprintf(&b, "PublicKey = %s\n", cfg.RemotePub)
+		if cfg.Endpoint != "" {
+			fmt.Fprintf(&b, "Endpoint = %s\n", cfg.Endpoint)
+		}
+		b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
+		if cfg.Keepalive != "" && cfg.Keepalive != "0" {
+			fmt.Fprintf(&b, "PersistentKeepalive = %s\n", cfg.Keepalive)
+		}
 	} else {
-		b.WriteString("PublicKey = <Insert Remote Public Key Here>\n")
-	}
-
-	if cfg.Endpoint != "" {
-		fmt.Fprintf(&b, "Endpoint = %s\n", cfg.Endpoint)
-	}
-
-	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
-
-	if cfg.Keepalive != "" && cfg.Keepalive != "0" {
-		fmt.Fprintf(&b, "PersistentKeepalive = %s\n", cfg.Keepalive)
+		b.WriteString("\n# [Peer]\n")
+		b.WriteString("# PublicKey = <Insert Remote Public Key Here>\n")
+		if cfg.Endpoint != "" {
+			fmt.Fprintf(&b, "# Endpoint = %s\n", cfg.Endpoint)
+		}
+		b.WriteString("# AllowedIPs = 0.0.0.0/0, ::/0\n")
+		if cfg.Keepalive != "" && cfg.Keepalive != "0" {
+			fmt.Fprintf(&b, "# PersistentKeepalive = %s\n", cfg.Keepalive)
+		}
 	}
 
 	return b.String()

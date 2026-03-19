@@ -242,12 +242,7 @@ func collectXfrmInputs(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) err
 	}
 
 	dev := cfg.DefaultDev
-	if err := askInput(prompter, "Primary interface for XFRM dev", &dev, func(v string) error {
-		if strings.TrimSpace(v) == "" {
-			return errors.New("device is required")
-		}
-		return nil
-	}); err != nil {
+	if err := askInput(prompter, "Primary interface for XFRM dev", &dev, validateDeviceName); err != nil {
 		return err
 	}
 	cfg.Device = dev
@@ -344,7 +339,12 @@ func collectXfrmInputs(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) err
 	case "1":
 		cfg.AuthMethod = AuthPSK
 		psk := ""
-		if err := askInput(prompter, "PSK (leave blank to auto-generate)", &psk, nil); err != nil {
+		if err := askInput(prompter, "PSK (leave blank to auto-generate)", &psk, func(v string) error {
+			if v != "" {
+				return validatePSK(v)
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		if strings.TrimSpace(psk) == "" {

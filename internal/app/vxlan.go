@@ -61,7 +61,7 @@ func runVXLAN(uiOut *ui.UI, prompter *ui.Prompter) error {
 	if dev == "" {
 		dev = "eth0"
 	}
-	if err := askInput(prompter, "Primary underlay device", &dev, requireNonEmpty); err != nil {
+	if err := askInput(prompter, "Primary underlay device", &dev, validateDeviceName); err != nil {
 		return err
 	}
 	cfg.Device = dev

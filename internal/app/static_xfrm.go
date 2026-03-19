@@ -110,7 +110,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 	if dev == "" {
 		dev = "eth0"
 	}
-	if err := askInput(prompter, "Primary device", &dev, requireNonEmpty); err != nil {
+	if err := askInput(prompter, "Primary device", &dev, validateDeviceName); err != nil {
 		return err
 	}
 	cfg.Device = dev
@@ -186,7 +186,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 	} else {
 		spiInput := ""
 		if err := askInput(prompter, "Paste SPI pair from remote (e.g. IN,OUT)", &spiInput, func(v string) error {
-			if !strings.Contains(v, ",") {
+			if len(strings.Split(v, ",")) != 2 {
 				return errors.New("format: SPI_IN,SPI_OUT")
 			}
 			return nil
@@ -224,7 +224,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 			uiOut.Ok("Generated Key Pair (IN,OUT): " + keyInput)
 		}
 		if err := askInput(prompter, "Paste Key Pair (e.g. K1,K2)", &keyInput, func(v string) error {
-			if !strings.Contains(v, ",") {
+			if len(strings.Split(v, ",")) != 2 {
 				return errors.New("format: KEY_IN,KEY_OUT")
 			}
 			return nil
@@ -252,7 +252,15 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 			encPair = k1 + "," + k2
 			uiOut.Ok("Generated Enc Key Pair: " + encPair)
 		}
-		askInput(prompter, "Paste Enc Key Pair", &encPair, nil)
+		err := askInput(prompter, "Paste Enc Key Pair", &encPair, func(v string) error {
+			if len(strings.Split(v, ",")) != 2 {
+				return errors.New("format: KEY_IN,KEY_OUT")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		parts := strings.Split(encPair, ",")
 		if genKeys {
 			cfg.EncKeyIn = strings.TrimSpace(parts[0])
@@ -269,7 +277,15 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 			authPair = k1 + "," + k2
 			uiOut.Ok("Generated Auth Key Pair: " + authPair)
 		}
-		askInput(prompter, "Paste Auth Key Pair", &authPair, nil)
+		err = askInput(prompter, "Paste Auth Key Pair", &authPair, func(v string) error {
+			if len(strings.Split(v, ",")) != 2 {
+				return errors.New("format: KEY_IN,KEY_OUT")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		partsAuth := strings.Split(authPair, ",")
 		if genKeys {
 			cfg.AuthKeyIn = strings.TrimSpace(partsAuth[0])

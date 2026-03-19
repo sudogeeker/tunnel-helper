@@ -164,22 +164,22 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	uiOut.Info("AmneziaWG Obfuscation Parameters")
-	cfg.Jc = askDefault(prompter, "Jc", "120")
-	cfg.Jmin = askDefault(prompter, "Jmin", "50")
-	cfg.Jmax = askDefault(prompter, "Jmax", "1000")
-	cfg.S1 = askDefault(prompter, "S1", "0")
-	cfg.S2 = askDefault(prompter, "S2", "0")
-	cfg.H1 = askDefault(prompter, "H1", "1")
-	cfg.H2 = askDefault(prompter, "H2", "2")
-	cfg.H3 = askDefault(prompter, "H3", "3")
-	cfg.H4 = askDefault(prompter, "H4", "4")
+	cfg.Jc = askDefault(prompter, "Jc", "120", validateNumber)
+	cfg.Jmin = askDefault(prompter, "Jmin", "50", validateNumber)
+	cfg.Jmax = askDefault(prompter, "Jmax", "1000", validateNumber)
+	cfg.S1 = askDefault(prompter, "S1", "0", validateNumber)
+	cfg.S2 = askDefault(prompter, "S2", "0", validateNumber)
+	cfg.H1 = askDefault(prompter, "H1", "1", validateNumber)
+	cfg.H2 = askDefault(prompter, "H2", "2", validateNumber)
+	cfg.H3 = askDefault(prompter, "H3", "3", validateNumber)
+	cfg.H4 = askDefault(prompter, "H4", "4", validateNumber)
 
 	uiOut.Info("Generating AmneziaWG key pair...")
-	priv, err := sys.Output("awg", "genkey")
+	privBytes, err := exec.Command("awg", "genkey").Output()
 	if err != nil {
 		return fmt.Errorf("failed to generate private key: %w", err)
 	}
-	priv = strings.TrimSpace(priv)
+	priv := strings.TrimSpace(string(privBytes))
 
 	cmd := exec.Command("awg", "pubkey")
 	cmd.Stdin = strings.NewReader(priv)
@@ -200,7 +200,7 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	cfg.RemotePub = strings.TrimSpace(remotePub)
 
 	mtu := "1420"
-	if err := askInput(prompter, "MTU (blank = default 1420)", &mtu, nil); err != nil {
+	if err := askInput(prompter, "MTU (blank = default 1420)", &mtu, validateNumber); err != nil {
 		return err
 	}
 	cfg.MTU = mtu
@@ -216,7 +216,7 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 		keepaliveDef = "25"
 	}
 	keepalive := keepaliveDef
-	if err := askInput(prompter, "PersistentKeepalive in seconds (0 = disable, blank = unset)", &keepalive, nil); err != nil {
+	if err := askInput(prompter, "PersistentKeepalive in seconds (0 = disable, blank = unset)", &keepalive, validateNumber); err != nil {
 		return err
 	}
 	cfg.Keepalive = keepalive
@@ -254,9 +254,17 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	return nil
 }
 
-func askDefault(prompter *ui.Prompter, title, def string) string {
+func askDefault(prompter *ui.Prompter, title, def string, validate func(string) error) string {
 	val := def
-	_ = askInput(prompter, fmt.Sprintf("%s (blank = %s)", title, def), &val, nil)
+	_ = askInput(prompter, fmt.Sprintf("%s (blank = %s)", title, def), &val, func(v string) error {
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		if validate != nil {
+			return validate(v)
+		}
+		return nil
+	})
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return def
@@ -406,21 +414,26 @@ func buildAwgConf(cfg *AmneziaWGConfig) string {
 		fmt.Fprintf(&b, "MTU = %s\n", cfg.MTU)
 	}
 
-	b.WriteString("\n[Peer]\n")
 	if cfg.RemotePub != "" {
+		b.WriteString("\n[Peer]\n")
 		fmt.Fprintf(&b, "PublicKey = %s\n", cfg.RemotePub)
+		if cfg.Endpoint != "" {
+			fmt.Fprintf(&b, "Endpoint = %s\n", cfg.Endpoint)
+		}
+		b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
+		if cfg.Keepalive != "" && cfg.Keepalive != "0" {
+			fmt.Fprintf(&b, "PersistentKeepalive = %s\n", cfg.Keepalive)
+		}
 	} else {
-		b.WriteString("PublicKey = <Insert Remote Public Key Here>\n")
-	}
-
-	if cfg.Endpoint != "" {
-		fmt.Fprintf(&b, "Endpoint = %s\n", cfg.Endpoint)
-	}
-
-	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
-
-	if cfg.Keepalive != "" && cfg.Keepalive != "0" {
-		fmt.Fprintf(&b, "PersistentKeepalive = %s\n", cfg.Keepalive)
+		b.WriteString("\n# [Peer]\n")
+		b.WriteString("# PublicKey = <Insert Remote Public Key Here>\n")
+		if cfg.Endpoint != "" {
+			fmt.Fprintf(&b, "# Endpoint = %s\n", cfg.Endpoint)
+		}
+		b.WriteString("# AllowedIPs = 0.0.0.0/0, ::/0\n")
+		if cfg.Keepalive != "" && cfg.Keepalive != "0" {
+			fmt.Fprintf(&b, "# PersistentKeepalive = %s\n", cfg.Keepalive)
+		}
 	}
 
 	return b.String()

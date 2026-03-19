@@ -148,9 +148,38 @@ func validateName(value string) error {
 	return nil
 }
 
+func validateNumber(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !isDigits(value) {
+		return errors.New("must be a number")
+	}
+	return nil
+}
+
 func requireNonEmpty(value string) error {
 	if strings.TrimSpace(value) == "" {
 		return errors.New("value is required")
+	}
+	return nil
+}
+
+func validateDeviceName(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("device name is required")
+	}
+	ok, _ := regexp.MatchString("^[a-zA-Z0-9._-]+$", value)
+	if !ok {
+		return errors.New("allowed characters: a-zA-Z0-9 . _ -")
+	}
+	return nil
+}
+
+func validatePSK(value string) error {
+	if strings.ContainsAny(value, "\"\n\r{}\\") {
+		return errors.New("PSK cannot contain quotes, newlines, braces or backslashes")
 	}
 	return nil
 }
