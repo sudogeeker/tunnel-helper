@@ -289,6 +289,7 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 
 	// Use ifconfig-noexec + up script to avoid configuring a peer/remote IP in the config
 	b.WriteString("ifconfig-noexec\n")
+	b.WriteString("script-security 2\n")
 	ipCmd := fmt.Sprintf("/usr/bin/ip addr add %s dev $dev && /usr/bin/ip link set dev $dev up", cfg.LocalInner)
 	b.WriteString(fmt.Sprintf("up \"/bin/sh -c '%s'\"\n", ipCmd))
 
