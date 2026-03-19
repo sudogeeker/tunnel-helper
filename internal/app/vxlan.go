@@ -25,6 +25,7 @@ type VxlanConfig struct {
 }
 
 func runVXLAN(uiOut *ui.UI, prompter *ui.Prompter) error {
+	uiOut.Clear()
 	cfg := &VxlanConfig{
 		IfaceDir: "/etc/network/interfaces.d",
 	}

@@ -45,6 +45,7 @@ func isOpenVPNMLKEMSupported() bool {
 }
 
 func runOpenVPN(uiOut *ui.UI, prompter *ui.Prompter) error {
+	uiOut.Clear()
 	uiOut.Title("OpenVPN")
 
 	if err := checkOpenVPNPackages(uiOut, prompter); err != nil {
@@ -95,6 +96,9 @@ func checkOpenVPNPackages(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	if ok {
+		uiOut.Info("Running apt update...")
+		sys.Run("apt-get", "update")
+		uiOut.Info("Installing packages...")
 		args := append([]string{"install", "-y"}, missing...)
 		if err := sys.Run("apt-get", args...); err != nil {
 			return fmt.Errorf("failed to install packages: %w", err)

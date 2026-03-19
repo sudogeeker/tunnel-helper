@@ -32,6 +32,7 @@ func Run(args []string) error {
 	}
 
 	for {
+		uiOut.Clear()
 		tunnelType := "manager"
 		options := []ui.Option{
 			{Label: "1) Manage existing tunnels", Value: "manager"},
@@ -79,6 +80,7 @@ func Run(args []string) error {
 		}
 
 		if err != nil {
+			err = wrapAbort(err)
 			if err == ErrAborted {
 				// 用户在子菜单选择了取消或返回，继续循环回到主菜单
 				continue

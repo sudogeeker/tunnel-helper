@@ -57,6 +57,12 @@ func (u *UI) Title(s string) {
 	fmt.Fprintln(u.Out, u.head.Render(s))
 }
 
+func (u *UI) Clear() {
+	if u.TTY {
+		fmt.Fprint(u.Out, "\033[H\033[2J\033[3J")
+	}
+}
+
 func (u *UI) Dim(s string) {
 	fmt.Fprintln(u.Out, u.dim.Render(s))
 }

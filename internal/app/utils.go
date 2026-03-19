@@ -25,7 +25,15 @@ func runtimeCheck() error {
 }
 
 func isAbortErr(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, huh.ErrUserAborted)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, huh.ErrUserAborted) {
+		return true
+	}
+	// Also catch exit status 130 (common for SIGINT) and "signal: interrupt"
+	errStr := err.Error()
+	return strings.Contains(errStr, "exit status 130") || strings.Contains(errStr, "interrupt")
 }
 
 func wrapAbort(err error) error {

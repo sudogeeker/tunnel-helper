@@ -70,6 +70,7 @@ const (
 )
 
 func runXFRM(uiOut *ui.UI, prompter *ui.Prompter, confDir string) error {
+	uiOut.Clear()
 	if err := checkXFRMSupport(uiOut); err != nil {
 		return err
 	}

@@ -60,6 +60,7 @@ type AmneziaWGConfig struct {
 }
 
 func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
+	uiOut.Clear()
 	cfg := &AmneziaWGConfig{
 		AwgDir: "/etc/amnezia/amneziawg",
 	}
@@ -389,6 +390,8 @@ func ensureKernelHeaders(uiOut *ui.UI, prompter *ui.Prompter) error {
 		return errors.New("missing kernel headers (user declined auto-install)")
 	}
 
+	uiOut.Info("Running apt update...")
+	sys.Run("apt", "update")
 	uiOut.Info("Installing kernel headers...")
 	// Try specific version first
 	pkgName := "linux-headers-" + kernelVersion
@@ -503,6 +506,8 @@ func ensureBuildDeps(uiOut *ui.UI) error {
 	if !sys.LookPath("apt") {
 		return errors.New("apt not found; install build-essential, git, dkms manually")
 	}
+	uiOut.Info("Running apt update...")
+	sys.Run("apt", "update")
 	uiOut.Info("Installing build dependencies...")
 	args := []string{"install", "-y", "build-essential", "git", "make", "dkms"}
 	return sys.Run("apt", args...)
