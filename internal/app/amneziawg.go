@@ -1,17 +1,36 @@
 package app
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/sudogeeker/tunnel-helper/internal/sys"
 	"github.com/sudogeeker/tunnel-helper/internal/ui"
 )
+
+func randomInt(min, max int64) string {
+	n, _ := rand.Int(rand.Reader, big.NewInt(max-min+1))
+	return fmt.Sprintf("%d", n.Int64()+min)
+}
+
+func validateAwgParam(val string, min, max int) error {
+	v, err := strconv.Atoi(strings.TrimSpace(val))
+	if err != nil {
+		return errors.New("must be a number")
+	}
+	if v < min || v > max {
+		return fmt.Errorf("must be between %d and %d", min, max)
+	}
+	return nil
+}
 
 type AmneziaWGConfig struct {
 	Name       string
@@ -164,15 +183,66 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	uiOut.Info("AmneziaWG Obfuscation Parameters")
-	cfg.Jc = askDefault(prompter, "Jc", "120", validateNumber)
-	cfg.Jmin = askDefault(prompter, "Jmin", "50", validateNumber)
-	cfg.Jmax = askDefault(prompter, "Jmax", "1000", validateNumber)
-	cfg.S1 = askDefault(prompter, "S1", "0", validateNumber)
-	cfg.S2 = askDefault(prompter, "S2", "0", validateNumber)
-	cfg.H1 = askDefault(prompter, "H1", "1", validateNumber)
-	cfg.H2 = askDefault(prompter, "H2", "2", validateNumber)
-	cfg.H3 = askDefault(prompter, "H3", "3", validateNumber)
-	cfg.H4 = askDefault(prompter, "H4", "4", validateNumber)
+	mode := "manual"
+	_ = prompter.Select("How to configure obfuscation parameters?", []ui.Option{
+		{Label: "Set manually (with randomized defaults)", Value: "manual"},
+		{Label: "Paste parameter string (Jc,Jmin,Jmax,S1,S2,H1,H2,H3,H4)", Value: "paste"},
+	}, &mode)
+
+	if mode == "paste" {
+		var pStr string
+		if err := askInput(prompter, "Paste parameter string", &pStr, func(v string) error {
+			v = strings.TrimSpace(v)
+			parts := strings.Split(v, ",")
+			if len(parts) != 9 {
+				return errors.New("must have 9 parts separated by commas")
+			}
+			// Strict range check for each pasted part
+			// Jc, Jmin, Jmax, S1, S2, H1, H2, H3, H4
+			ranges := [][]int{{1, 128}, {1, 1280}, {1, 1280}, {0, 1280}, {0, 1280}, {1, 2147483647}, {1, 2147483647}, {1, 2147483647}, {1, 2147483647}}
+			for i, p := range parts {
+				if err := validateAwgParam(p, ranges[i][0], ranges[i][1]); err != nil {
+					return fmt.Errorf("part %d (%s) invalid: %w", i+1, p, err)
+				}
+			}
+			jmin, _ := strconv.Atoi(parts[1])
+			jmax, _ := strconv.Atoi(parts[2])
+			if jmax < jmin {
+				return errors.New("pasted parameters: Jmax must be >= Jmin")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		parts := strings.Split(strings.TrimSpace(pStr), ",")
+		cfg.Jc, cfg.Jmin, cfg.Jmax, cfg.S1, cfg.S2 = parts[0], parts[1], parts[2], parts[3], parts[4]
+		cfg.H1, cfg.H2, cfg.H3, cfg.H4 = parts[5], parts[6], parts[7], parts[8]
+	} else {
+		// Manual input with strict validation and randomized defaults
+		cfg.Jc = askDefault(prompter, "Jc (Junk packets count [1-128])", randomInt(3, 10), func(s string) error { return validateAwgParam(s, 1, 128) })
+		cfg.Jmin = askDefault(prompter, "Jmin (Min junk packet size [1-1280])", randomInt(30, 100), func(s string) error { return validateAwgParam(s, 1, 1280) })
+		cfg.Jmax = askDefault(prompter, "Jmax (Max junk packet size [1-1280])", randomInt(500, 1200), func(s string) error {
+			if err := validateAwgParam(s, 1, 1280); err != nil {
+				return err
+			}
+			jminVal, _ := strconv.Atoi(cfg.Jmin)
+			jmaxVal, _ := strconv.Atoi(s)
+			if jmaxVal < jminVal {
+				return fmt.Errorf("Jmax must be greater than Jmin (%d)", jminVal)
+			}
+			return nil
+		})
+		cfg.S1 = askDefault(prompter, "S1 (Initiation packet padding [0-1280])", randomInt(15, 150), func(s string) error { return validateAwgParam(s, 0, 1280) })
+		cfg.S2 = askDefault(prompter, "S2 (Response packet padding [0-1280])", randomInt(15, 150), func(s string) error { return validateAwgParam(s, 0, 1280) })
+		cfg.H1 = askDefault(prompter, "H1 (Magic Header 1 [non-zero 32-bit])", randomInt(1000, 2147483647), func(s string) error { return validateAwgParam(s, 1, 2147483647) })
+		cfg.H2 = askDefault(prompter, "H2 (Magic Header 2 [non-zero 32-bit])", randomInt(1000, 2147483647), func(s string) error { return validateAwgParam(s, 1, 2147483647) })
+		cfg.H3 = askDefault(prompter, "H3 (Magic Header 3 [non-zero 32-bit])", randomInt(1000, 2147483647), func(s string) error { return validateAwgParam(s, 1, 2147483647) })
+		cfg.H4 = askDefault(prompter, "H4 (Magic Header 4 [non-zero 32-bit])", randomInt(1000, 2147483647), func(s string) error { return validateAwgParam(s, 1, 2147483647) })
+	}
+
+	obfsStr := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s",
+		cfg.Jc, cfg.Jmin, cfg.Jmax, cfg.S1, cfg.S2, cfg.H1, cfg.H2, cfg.H3, cfg.H4)
+	uiOut.Ok("Obfuscation string for reference: " + obfsStr)
 
 	uiOut.Info("Generating AmneziaWG key pair...")
 	privBytes, err := exec.Command("awg", "genkey").Output()
@@ -444,6 +514,8 @@ func printAwgNextSteps(cfg *AmneziaWGConfig, uiOut *ui.UI) {
 	uiOut.Title("Configuration Summary")
 	fmt.Fprintf(uiOut.Out, "  Interface: %s\n", cfg.Interface)
 	fmt.Fprintf(uiOut.Out, "  Local Public Key: %s\n", cfg.LocalPub)
+	fmt.Fprintf(uiOut.Out, "  Obfuscation Params: %s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+		cfg.Jc, cfg.Jmin, cfg.Jmax, cfg.S1, cfg.S2, cfg.H1, cfg.H2, cfg.H3, cfg.H4)
 	if cfg.InnerCIDR != "" {
 		fmt.Fprintf(uiOut.Out, "  Inner Address: %s\n", cfg.InnerCIDR)
 	}
