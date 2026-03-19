@@ -73,8 +73,6 @@ func checkOpenVPNPackages(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	if len(missing) == 0 {
-		// Try to load module
-		sys.Run("modprobe", "ovpn-dco")
 		return nil
 	}
 
@@ -94,7 +92,6 @@ func checkOpenVPNPackages(uiOut *ui.UI, prompter *ui.Prompter) error {
 			return fmt.Errorf("failed to install packages: %w", err)
 		}
 		uiOut.Ok("Packages installed successfully")
-		sys.Run("modprobe", "ovpn-dco")
 	}
 
 	return nil
@@ -139,7 +136,11 @@ func collectOpenVPNInputs(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.Prompte
 
 	// Port
 	port := "1194"
-	if err := askInput(prompter, "Port", &port, validateNumber); err != nil {
+	portPrompt := "Listen Port"
+	if cfg.Role == "initiator" {
+		portPrompt = "Remote Port (to connect to)"
+	}
+	if err := askInput(prompter, portPrompt, &port, validateNumber); err != nil {
 		return err
 	}
 	cfg.Port = port
@@ -169,20 +170,39 @@ func collectOpenVPNInputs(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.Prompte
 	}
 
 	// Inner IPs
-	localInner := "10.8.0.1"
-	remoteInner := "10.8.0.2"
-	if cfg.Role == "initiator" {
-		localInner = "10.8.0.2"
-		remoteInner = "10.8.0.1"
+	insideEnv := strings.TrimSpace(os.Getenv("TUNNEL_INSIDE_ADDR"))
+	if insideEnv != "" {
+		innerCIDR, _, err := parseTunnelInsideAddrEnv(insideEnv)
+		if err != nil {
+			return err
+		}
+		// In P2P, we use the IP from CIDR as local, and let the user specify remote or try to guess.
+		// If it's a CIDR like 10.0.0.1/30, local is 10.0.0.1.
+		// For IPv6, we often want the /bits part.
+		cfg.LocalInner = innerCIDR
+		uiOut.Info("Local inner address from TUNNEL_INSIDE_ADDR: " + cfg.LocalInner)
+
+		remoteInner := ""
+		if err := askInput(prompter, "Remote Inner IP (e.g., 10.8.0.2)", &remoteInner, requireNonEmpty); err != nil {
+			return err
+		}
+		cfg.RemoteInner = remoteInner
+	} else {
+		localInner := "10.8.0.1"
+		remoteInner := "10.8.0.2"
+		if cfg.Role == "initiator" {
+			localInner = "10.8.0.2"
+			remoteInner = "10.8.0.1"
+		}
+		if err := askInput(prompter, "Local Inner IP (e.g., 10.8.0.1)", &localInner, requireNonEmpty); err != nil {
+			return err
+		}
+		cfg.LocalInner = localInner
+		if err := askInput(prompter, "Remote Inner IP (e.g., 10.8.0.2)", &remoteInner, requireNonEmpty); err != nil {
+			return err
+		}
+		cfg.RemoteInner = remoteInner
 	}
-	if err := askInput(prompter, "Local Inner IP (e.g., 10.8.0.1)", &localInner, requireNonEmpty); err != nil {
-		return err
-	}
-	cfg.LocalInner = localInner
-	if err := askInput(prompter, "Remote Inner IP (e.g., 10.8.0.2)", &remoteInner, requireNonEmpty); err != nil {
-		return err
-	}
-	cfg.RemoteInner = remoteInner
 
 	// MTU
 	mtu := "1420"
@@ -287,7 +307,17 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 		b.WriteString("nobind\n")
 	}
 
-	b.WriteString(fmt.Sprintf("ifconfig %s %s\n", cfg.LocalInner, cfg.RemoteInner))
+	if strings.Contains(cfg.LocalInner, ":") {
+		// IPv6 P2P: ifconfig-ipv6 <local>/<bits> <remote>
+		b.WriteString(fmt.Sprintf("ifconfig-ipv6 %s %s\n", cfg.LocalInner, cfg.RemoteInner))
+	} else {
+		// IPv4 P2P: ifconfig <local> <remote>
+		localIP := cfg.LocalInner
+		if strings.Contains(localIP, "/") {
+			localIP = strings.Split(localIP, "/")[0]
+		}
+		b.WriteString(fmt.Sprintf("ifconfig %s %s\n", localIP, cfg.RemoteInner))
+	}
 
 	// Performance Optimizations
 	b.WriteString("sndbuf 0\n")
