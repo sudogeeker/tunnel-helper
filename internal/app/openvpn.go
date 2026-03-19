@@ -21,8 +21,7 @@ type OpenVPNConfig struct {
 	LocalInner           string
 	RemoteInner          string
 	DCO                  bool
-	AuthMethod           string // "psk" or "rpk"
-	PSKPath              string
+	AuthMethod           string // "rpk"
 	RPKLocalCertPath     string
 	RPKLocalKeyPath      string
 	RPKLocalFingerprint  string
@@ -31,7 +30,6 @@ type OpenVPNConfig struct {
 }
 
 const (
-	OVPNAuthPSK = "psk"
 	OVPNAuthRPK = "rpk"
 )
 
@@ -74,6 +72,8 @@ func checkOpenVPNPackages(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	if len(missing) == 0 {
+		// Try to load module
+		sys.Run("modprobe", "ovpn-dco")
 		return nil
 	}
 
@@ -93,6 +93,7 @@ func checkOpenVPNPackages(uiOut *ui.UI, prompter *ui.Prompter) error {
 			return fmt.Errorf("failed to install packages: %w", err)
 		}
 		uiOut.Ok("Packages installed successfully")
+		sys.Run("modprobe", "ovpn-dco")
 	}
 
 	return nil
@@ -195,19 +196,7 @@ func collectOpenVPNInputs(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.Prompte
 	}
 	cfg.DCO = dco
 
-	// Auth
-	authChoice := "1"
-	if err := askSelectRaw(prompter, "Authentication Mode", []ui.Option{
-		{Label: "1) Static Key (PSK) - Simple symmetric key", Value: "1"},
-		{Label: "2) Peer Fingerprint (RPK) - TLS with SHA256 fingerprints (OpenVPN 2.6+)", Value: "2"},
-	}, &authChoice); err != nil {
-		return err
-	}
-	if authChoice == "1" {
-		cfg.AuthMethod = OVPNAuthPSK
-	} else {
-		cfg.AuthMethod = OVPNAuthRPK
-	}
+	cfg.AuthMethod = OVPNAuthRPK
 
 	return nil
 }
@@ -219,18 +208,6 @@ func generateOpenVPNCredentials(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.P
 	}
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return err
-	}
-
-	if cfg.AuthMethod == OVPNAuthPSK {
-		cfg.PSKPath = filepath.Join(baseDir, cfg.Name+".secret")
-		if !fileExists(cfg.PSKPath) {
-			uiOut.Info("Generating static key...")
-			if err := sys.Run("openvpn", "--genkey", "secret", cfg.PSKPath); err != nil {
-				return fmt.Errorf("failed to generate static key: %w", err)
-			}
-		}
-		uiOut.Ok("Static key available at: " + cfg.PSKPath)
-		return nil
 	}
 
 	// RPK Mode
@@ -327,23 +304,19 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 	b.WriteString("persist-tun\n")
 
 	// Authentication
-	if cfg.AuthMethod == OVPNAuthPSK {
-		b.WriteString(fmt.Sprintf("secret %s\n", filepath.Base(cfg.PSKPath)))
+	if cfg.Role == "listener" {
+		b.WriteString("tls-server\n")
+		b.WriteString("dh none\n")
 	} else {
-		if cfg.Role == "listener" {
-			b.WriteString("tls-server\n")
-			b.WriteString("dh none\n")
-		} else {
-			b.WriteString("tls-client\n")
-		}
-		b.WriteString(fmt.Sprintf("cert %s\n", filepath.Base(cfg.RPKLocalCertPath)))
-		b.WriteString(fmt.Sprintf("key %s\n", filepath.Base(cfg.RPKLocalKeyPath)))
+		b.WriteString("tls-client\n")
+	}
+	b.WriteString(fmt.Sprintf("cert %s\n", filepath.Base(cfg.RPKLocalCertPath)))
+	b.WriteString(fmt.Sprintf("key %s\n", filepath.Base(cfg.RPKLocalKeyPath)))
 
-		if cfg.RPKRemoteFingerprint != "" {
-			b.WriteString(fmt.Sprintf("peer-fingerprint \"%s\"\n", cfg.RPKRemoteFingerprint))
-		} else {
-			b.WriteString("# peer-fingerprint \"<REMOTE_FINGERPRINT_HERE>\"\n")
-		}
+	if cfg.RPKRemoteFingerprint != "" {
+		b.WriteString(fmt.Sprintf("peer-fingerprint \"%s\"\n", cfg.RPKRemoteFingerprint))
+	} else {
+		b.WriteString("# peer-fingerprint \"<REMOTE_FINGERPRINT_HERE>\"\n")
 	}
 
 	b.WriteString("verb 3\n")
@@ -383,13 +356,9 @@ func printOpenVPNNextSteps(cfg *OpenVPNConfig, uiOut *ui.UI) {
 	fmt.Fprintf(uiOut.Out, "  - Opposite Role (%s)\n", map[string]string{"listener": "initiator", "initiator": "listener"}[cfg.Role])
 	fmt.Fprintf(uiOut.Out, "  - Same Protocol and Port\n")
 	fmt.Fprintf(uiOut.Out, "  - Flipped Inner IPs (ifconfig %s %s)\n", cfg.RemoteInner, cfg.LocalInner)
-	if cfg.AuthMethod == OVPNAuthPSK {
-		fmt.Fprintf(uiOut.Out, "  - The same static key (copy contents of %s)\n", cfg.PSKPath)
-	} else {
-		fmt.Fprintf(uiOut.Out, "  - Your SHA256 Fingerprint: %s\n", cfg.RPKLocalFingerprint)
-		if cfg.RPKRemoteFingerprint == "" {
-			fmt.Fprintf(uiOut.Out, "  ! You must also edit %s and set their fingerprint\n", cfg.ConfPath)
-		}
+	fmt.Fprintf(uiOut.Out, "  - Your SHA256 Fingerprint: %s\n", cfg.RPKLocalFingerprint)
+	if cfg.RPKRemoteFingerprint == "" {
+		fmt.Fprintf(uiOut.Out, "  ! You must also edit %s and set their fingerprint\n", cfg.ConfPath)
 	}
 	uiOut.HR()
 }

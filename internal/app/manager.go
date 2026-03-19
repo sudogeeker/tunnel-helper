@@ -177,7 +177,7 @@ func scanTunnels(xfrmConfDir string) ([]ManagedTunnel, error) {
 			}
 
 			var extraFiles []string
-			for _, ext := range []string{".secret", ".crt", ".key"} {
+			for _, ext := range []string{".crt", ".key"} {
 				extraPath := filepath.Join(dir, name+ext)
 				if fileExists(extraPath) {
 					extraFiles = append(extraFiles, extraPath)

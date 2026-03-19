@@ -129,8 +129,8 @@ Generates configuration files in `/etc/openvpn/server/` or `/etc/openvpn/client/
 - Uses the `Listener (Server)` / `Initiator (Client)` model to define connections for P2P tunnels.
 - Supports both **UDP** and **TCP**.
 - Strongly encourages and enables **DCO (Data Channel Offload)** by default for maximum performance.
-- Supports **Static Key (PSK)** for straightforward symmetric setup.
 - Supports OpenVPN 2.6+ **Peer Fingerprint (RPK/TLS)**, auto-generating self-signed certificates and handling SHA256 fingerprints natively, removing the need for a complex CA infrastructure.
+- Automatically handles kernel module loading (`ovpn-dco`).
 
 ---
 
