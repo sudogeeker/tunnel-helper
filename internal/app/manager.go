@@ -381,20 +381,24 @@ func editWgLikeTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) erro
 		}
 	}
 
-	opts := make([]ui.Option, len(fields)+1)
+	opts := make([]ui.Option, len(fields)+2)
+	opts[0] = ui.Option{Label: ">> Save Changes and Exit", Value: "save"}
+	opts[1] = ui.Option{Label: "!! Discard Changes and Back", Value: "discard"}
 	for i, f := range fields {
-		opts[i] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
+		opts[i+2] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
 	}
-	opts[len(fields)] = ui.Option{Label: "Save and Exit", Value: "save"}
 
 	for {
 		choice := ""
-		if err := askSelectRaw(prompter, "Select field to change", opts, &choice); err != nil {
+		if err := askSelectRaw(prompter, "Interactive Editor (Select field to modify)", opts, &choice); err != nil {
 			return err
 		}
 
 		if choice == "save" {
 			break
+		}
+		if choice == "discard" {
+			return ErrAborted
 		}
 
 		idx := 0
@@ -537,68 +541,54 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 		}
 	}
 
-	opts := make([]ui.Option, len(fields)+1)
+	opts := make([]ui.Option, len(fields)+2)
+	opts[0] = ui.Option{Label: ">> Save Changes and Exit", Value: "save"}
+	opts[1] = ui.Option{Label: "!! Discard Changes and Back", Value: "discard"}
 	for i, f := range fields {
-		opts[i] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
+		opts[i+2] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
 	}
-	opts[len(fields)] = ui.Option{Label: "Save and Exit", Value: "save"}
 
 	for {
 		choice := ""
-		if err := askSelectRaw(prompter, "Select field to change", opts, &choice); err != nil {
+		if err := askSelectRaw(prompter, "Interactive Editor (Select field to modify)", opts, &choice); err != nil {
 			return err
 		}
 		if choice == "save" {
 			break
 		}
+		if choice == "discard" {
+			return ErrAborted
+		}
 		idx := 0
 		fmt.Sscanf(choice, "%d", &idx)
 		f := &fields[idx]
-
 		newVal := f.Value
 		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
 			return err
 		}
 
-		oldVal := f.Value
-		newVal = strings.TrimSpace(newVal)
-		if newVal == "" || newVal == oldVal {
-			continue
-		}
+		f.Value = strings.TrimSpace(newVal)
+		opts[idx+2].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
+	}
 
-		// 执行替换逻辑
-		// 对于 interfaces 文件，我们必须非常小心。如果一个值（比如 IP）出现了多次，
-		// 且它在不同的上下文（比如 src 和 dst）中，直接全局替换可能会出错。
-		// 但由于我们的隧道配置通常是点对点的，且 local/remote 是成对出现的，
-		// 我们可以通过寻找前缀来辅助定位。
-
-		if f.Key != "" && f.Key != "0x" {
-			// 尝试匹配 "key oldVal" 并替换为 "key newVal"
-			pattern := regexp.MustCompile(`(` + regexp.QuoteMeta(f.Key) + `\s+)` + regexp.QuoteMeta(oldVal))
-			// 如果是 In/Out 方向，只替换特定的那一个
-			if strings.Contains(f.Label, "In") || strings.Contains(f.Label, "Out") {
-				allMatches := pattern.FindAllStringIndex(text, -1)
-				targetIdx := 0
-				if strings.Contains(f.Label, "Out") && len(allMatches) > 1 {
-					targetIdx = 1
-				}
-				if len(allMatches) > targetIdx {
-					m := allMatches[targetIdx]
-					// 重新构建 text
-					prefixMatch := pattern.FindStringSubmatch(text[m[0]:m[1]])
-					text = text[:m[0]] + prefixMatch[1] + newVal + text[m[1]:]
-				}
-			} else {
-				// 普通字段，替换所有
-				text = pattern.ReplaceAllString(text, `${1}`+newVal)
+	// 统一在最后执行替换逻辑
+	for _, f := range fields {
+		// 寻找该字段在 text 中的原始值并替换（这里需要根据 Regex 找到当前值）
+		// 为了简单且鲁棒，我们重新解析 text
+		m := f.Regex.FindStringSubmatch(text)
+		if len(m) > 1 {
+			oldInFile := m[1]
+			if oldInFile == f.Value {
+				continue
 			}
-		} else {
-			// 对于 Key 等没有明确短前缀的，使用更长的正则匹配替换
-			text = strings.ReplaceAll(text, oldVal, newVal)
+			// 执行替换
+			if f.Key != "" && f.Key != "0x" {
+				pattern := regexp.MustCompile(`(` + regexp.QuoteMeta(f.Key) + `\s+)` + regexp.QuoteMeta(oldInFile))
+				text = pattern.ReplaceAllString(text, `${1}`+f.Value)
+			} else {
+				text = strings.ReplaceAll(text, oldInFile, f.Value)
+			}
 		}
-
-		f.Value = newVal
-		opts[idx].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
 	}
 
 	return os.WriteFile(t.MainConfig, []byte(text), 0644)
@@ -655,19 +645,23 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 		}{"Inner CIDR", regexp.MustCompile(`replace\s+([^\s/]+/[0-9]+)`), val, cfgFile})
 	}
 
-	opts := make([]ui.Option, len(fields)+1)
+	opts := make([]ui.Option, len(fields)+2)
+	opts[0] = ui.Option{Label: ">> Save Changes and Exit", Value: "save"}
+	opts[1] = ui.Option{Label: "!! Discard Changes and Back", Value: "discard"}
 	for i, f := range fields {
-		opts[i] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
+		opts[i+2] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
 	}
-	opts[len(fields)] = ui.Option{Label: "Save and Exit", Value: "save"}
 
 	for {
 		choice := ""
-		if err := askSelectRaw(prompter, "Select field to change", opts, &choice); err != nil {
+		if err := askSelectRaw(prompter, "Interactive Editor (Select field to modify)", opts, &choice); err != nil {
 			return err
 		}
 		if choice == "save" {
 			break
+		}
+		if choice == "discard" {
+			return ErrAborted
 		}
 		idx := 0
 		fmt.Sscanf(choice, "%d", &idx)
@@ -676,19 +670,19 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
 			return err
 		}
+		f.Value = strings.TrimSpace(newVal)
+		opts[idx+2].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
+	}
 
-		oldVal := f.Value
-		newVal = strings.TrimSpace(newVal)
-		if newVal == "" || newVal == oldVal {
-			continue
-		}
-
+	// 执行最后的保存逻辑
+	for _, f := range fields {
 		if f.File == t.MainConfig {
-			// Update swanctl connection file
-			// We need to be careful with IDs as they are inside blocks
 			m := f.Regex.FindStringSubmatchIndex(connText)
 			if len(m) > 1 {
-				connText = connText[:m[2]] + newVal + connText[m[3]:]
+				currentVal := connText[m[2]:m[3]]
+				if currentVal != f.Value {
+					connText = connText[:m[2]] + f.Value + connText[m[3]:]
+				}
 			}
 		} else {
 			// Update .cfg file
@@ -696,13 +690,13 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 			cfgText := string(cfgContent)
 			m := f.Regex.FindStringSubmatchIndex(cfgText)
 			if len(m) > 1 {
-				cfgText = cfgText[:m[2]] + newVal + cfgText[m[3]:]
-				os.WriteFile(f.File, []byte(cfgText), 0644)
+				currentVal := cfgText[m[2]:m[3]]
+				if currentVal != f.Value {
+					cfgText = cfgText[:m[2]] + f.Value + cfgText[m[3]:]
+					os.WriteFile(f.File, []byte(cfgText), 0644)
+				}
 			}
 		}
-
-		f.Value = newVal
-		opts[idx].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
 	}
 
 	return os.WriteFile(t.MainConfig, []byte(connText), 0644)

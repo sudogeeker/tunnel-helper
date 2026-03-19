@@ -31,40 +31,58 @@ func Run(args []string) error {
 		return err
 	}
 
-	tunnelType := "1"
-	options := []ui.Option{
-		{Label: "1) XFRM (IPsec/IKEv2 via strongSwan)", Value: "1"},
-		{Label: "2) Static XFRM (Manual Keying)", Value: "2"},
-		{Label: "3) WireGuard", Value: "3"},
-		{Label: "4) AmneziaWG", Value: "4"},
-		{Label: "5) VXLAN", Value: "5"},
-		{Label: "6) GRE", Value: "6"},
-		{Label: "7) Manage existing tunnels", Value: "7"},
-	}
+	for {
+		tunnelType := "manager"
+		options := []ui.Option{
+			{Label: "1) Manage existing tunnels (Status/Up/Down/Edit)", Value: "manager"},
+			{Label: "2) XFRM (IPsec/IKEv2 via strongSwan)", Value: "1"},
+			{Label: "3) Static XFRM (Manual Keying)", Value: "2"},
+			{Label: "4) WireGuard", Value: "3"},
+			{Label: "5) AmneziaWG", Value: "4"},
+			{Label: "6) VXLAN", Value: "5"},
+			{Label: "7) GRE", Value: "6"},
+			{Label: "0) Exit", Value: "exit"},
+		}
 
-	uiOut.HR()
-	uiOut.Title("tunnel-helper - VPN / Tunnel Generator")
-	uiOut.HR()
-	if err := askSelectRaw(prompter, "Tunnel type", options, &tunnelType); err != nil {
-		return wrapAbort(err)
-	}
+		uiOut.HR()
+		uiOut.Title("tunnel-helper - VPN / Tunnel Generator")
+		uiOut.HR()
+		if err := askSelectRaw(prompter, "Main Menu (Select an action)", options, &tunnelType); err != nil {
+			// 如果在主菜单直接取消，则退出
+			if isAbortErr(err) {
+				return nil
+			}
+			return wrapAbort(err)
+		}
 
-	switch tunnelType {
-	case "1":
-		return runXFRM(uiOut, prompter, *confDir)
-	case "2":
-		return runStaticXFRM(uiOut, prompter)
-	case "3":
-		return runWireguard(uiOut, prompter)
-	case "4":
-		return runAmneziaWG(uiOut, prompter)
-	case "5":
-		return runVXLAN(uiOut, prompter)
-	case "6":
-		return runGRE(uiOut, prompter)
-	case "7":
-		return runManager(uiOut, prompter, *confDir)
-	}
+		if tunnelType == "exit" {
+			return nil
+		}
 
-	return nil
+		var err error
+		switch tunnelType {
+		case "manager":
+			err = runManager(uiOut, prompter, *confDir)
+		case "1":
+			err = runXFRM(uiOut, prompter, *confDir)
+		case "2":
+			err = runStaticXFRM(uiOut, prompter)
+		case "3":
+			err = runWireguard(uiOut, prompter)
+		case "4":
+			err = runAmneziaWG(uiOut, prompter)
+		case "5":
+			err = runVXLAN(uiOut, prompter)
+		case "6":
+			err = runGRE(uiOut, prompter)
+		}
+
+		if err != nil {
+			if err == ErrAborted {
+				// 用户在子菜单选择了取消或返回，继续循环回到主菜单
+				continue
+			}
+			return err
+		}
+	}
 }
