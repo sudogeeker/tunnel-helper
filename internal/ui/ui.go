@@ -11,16 +11,18 @@ import (
 )
 
 type UI struct {
-	Out  io.Writer
-	Err  io.Writer
-	TTY  bool
-	In   *bufio.Reader
-	info lipgloss.Style
-	warn lipgloss.Style
-	ok   lipgloss.Style
-	err  lipgloss.Style
-	head lipgloss.Style
-	dim  lipgloss.Style
+	Out          io.Writer
+	Err          io.Writer
+	TTY          bool
+	In           *bufio.Reader
+	info         lipgloss.Style
+	warn         lipgloss.Style
+	ok           lipgloss.Style
+	err          lipgloss.Style
+	head         lipgloss.Style
+	dim          lipgloss.Style
+	PendingTitle string
+	PendingDim   string
 }
 
 func New(out, err io.Writer, in io.Reader) *UI {
@@ -54,19 +56,19 @@ func (u *UI) HR() {
 }
 
 func (u *UI) Title(s string) {
-	fmt.Fprintln(u.Out, u.head.Render(s))
-}
-
-func (u *UI) Clear() {
-	// 停止手动光标操作，由 Prompter (huh) 处理渲染周期
-}
-
-func (u *UI) ClearLines(n int) {
-	// 废弃手动擦除逻辑
+	u.PendingTitle = s
 }
 
 func (u *UI) Dim(s string) {
-	fmt.Fprintln(u.Out, u.dim.Render(s))
+	u.PendingDim = s
+}
+
+func (u *UI) Clear() {
+	// 由 huh 自动处理渲染周期
+}
+
+func (u *UI) ClearLines(n int) {
+	// 废弃
 }
 
 func (u *UI) Info(s string) {

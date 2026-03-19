@@ -36,11 +36,16 @@ func (p *Prompter) Select(title string, options []Option, value *string) error {
 		for _, opt := range options {
 			huhOptions = append(huhOptions, huh.NewOption(opt.Label, opt.Value))
 		}
-		return p.newForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().Title(title).Options(huhOptions...).Value(value),
-			),
-		).Run()
+		sel := huh.NewSelect[string]().Title(title).Options(huhOptions...).Value(value)
+		if p.ui.PendingTitle != "" {
+			sel.Title(p.ui.PendingTitle + "\n" + title)
+			if p.ui.PendingDim != "" {
+				sel.Description(p.ui.PendingDim)
+			}
+			p.ui.PendingTitle = ""
+			p.ui.PendingDim = ""
+		}
+		return p.newForm(huh.NewGroup(sel)).Run()
 	}
 
 	fmt.Fprintln(p.out, title)
@@ -67,6 +72,14 @@ func (p *Prompter) Select(title string, options []Option, value *string) error {
 func (p *Prompter) Input(title string, value *string, validate func(string) error) error {
 	if p.ui.TTY {
 		input := huh.NewInput().Title(title).Value(value)
+		if p.ui.PendingTitle != "" {
+			input.Title(p.ui.PendingTitle + "\n" + title)
+			if p.ui.PendingDim != "" {
+				input.Description(p.ui.PendingDim)
+			}
+			p.ui.PendingTitle = ""
+			p.ui.PendingDim = ""
+		}
 		if validate != nil {
 			input = input.Validate(func(s string) error { return validate(strings.TrimSpace(s)) })
 		}
@@ -99,6 +112,14 @@ func (p *Prompter) Confirm(title string, value *bool, defaultYes bool) error {
 	if p.ui.TTY {
 		c := huh.NewConfirm().Title(title).Value(value)
 		c = c.Affirmative("Yes").Negative("No")
+		if p.ui.PendingTitle != "" {
+			c.Title(p.ui.PendingTitle + "\n" + title)
+			if p.ui.PendingDim != "" {
+				c.Description(p.ui.PendingDim)
+			}
+			p.ui.PendingTitle = ""
+			p.ui.PendingDim = ""
+		}
 		return p.newForm(huh.NewGroup(c)).Run()
 	}
 
