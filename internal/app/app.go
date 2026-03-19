@@ -41,6 +41,7 @@ func Run(args []string) error {
 			{Label: "5) AmneziaWG", Value: "4"},
 			{Label: "6) VXLAN", Value: "5"},
 			{Label: "7) GRE", Value: "6"},
+			{Label: "8) OpenVPN (DCO)", Value: "7"},
 			{Label: "0) Exit", Value: "exit"},
 		}
 
@@ -75,6 +76,8 @@ func Run(args []string) error {
 			err = runVXLAN(uiOut, prompter)
 		case "6":
 			err = runGRE(uiOut, prompter)
+		case "7":
+			err = runOpenVPN(uiOut, prompter)
 		}
 
 		if err != nil {

@@ -154,6 +154,52 @@ func scanTunnels(xfrmConfDir string) ([]ManagedTunnel, error) {
 		tunnels = append(tunnels, t)
 	}
 
+	// OpenVPN
+	ovpnDirs := []string{"/etc/openvpn/server", "/etc/openvpn/client"}
+	for _, dir := range ovpnDirs {
+		files, _ = filepath.Glob(filepath.Join(dir, "*.conf"))
+		for _, f := range files {
+			base := filepath.Base(f)
+			name := strings.TrimSuffix(base, ".conf")
+
+			// Parse config to extract actual interface name
+			content, _ := os.ReadFile(f)
+			iface := ""
+			for _, line := range strings.Split(string(content), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "dev ") {
+					iface = strings.TrimSpace(strings.TrimPrefix(line, "dev "))
+					break
+				}
+			}
+			if iface == "" {
+				iface = "tun-" + name
+			}
+
+			var extraFiles []string
+			for _, ext := range []string{".secret", ".crt", ".key"} {
+				extraPath := filepath.Join(dir, name+ext)
+				if fileExists(extraPath) {
+					extraFiles = append(extraFiles, extraPath)
+				}
+			}
+
+			role := "server"
+			if strings.Contains(dir, "client") {
+				role = "client"
+			}
+
+			t := ManagedTunnel{
+				Type:       "OpenVPN (" + role + ")",
+				Name:       name,
+				Interface:  iface,
+				MainConfig: f,
+				ExtraFiles: extraFiles,
+			}
+			tunnels = append(tunnels, t)
+		}
+	}
+
 	// VXLAN & GRE
 	files, _ = filepath.Glob("/etc/network/interfaces.d/*.cfg")
 	for _, f := range files {
@@ -234,6 +280,15 @@ func showTunnelStatus(uiOut *ui.UI, t ManagedTunnel) {
 		uiOut.Info("awg show:")
 		out, _ = sys.Output("awg", "show", t.Interface)
 		fmt.Fprintln(uiOut.Out, out)
+	case "OpenVPN (server)", "OpenVPN (client)":
+		role := "server"
+		if strings.Contains(t.Type, "client") {
+			role = "client"
+		}
+		serviceName := fmt.Sprintf("openvpn-%s@%s", role, t.Name)
+		uiOut.Info(fmt.Sprintf("systemctl status %s:", serviceName))
+		out, _ = sys.Output("systemctl", "status", "--no-pager", serviceName)
+		fmt.Fprintln(uiOut.Out, out)
 	}
 }
 
@@ -252,6 +307,15 @@ func bringTunnelUp(uiOut *ui.UI, t ManagedTunnel) {
 	case "AmneziaWG":
 		if err := sys.Run("awg-quick", "up", t.Interface); err != nil {
 			uiOut.Warn("awg-quick up failed")
+		}
+	case "OpenVPN (server)", "OpenVPN (client)":
+		role := "server"
+		if strings.Contains(t.Type, "client") {
+			role = "client"
+		}
+		serviceName := fmt.Sprintf("openvpn-%s@%s", role, t.Name)
+		if err := sys.Run("systemctl", "start", serviceName); err != nil {
+			uiOut.Warn(fmt.Sprintf("failed to start %s", serviceName))
 		}
 	case "StaticXFRM", "VXLAN", "GRE":
 		if err := sys.Run("ifup", t.Interface); err != nil {
@@ -275,6 +339,15 @@ func bringTunnelDown(uiOut *ui.UI, t ManagedTunnel) {
 	case "AmneziaWG":
 		if err := sys.Run("awg-quick", "down", t.Interface); err != nil {
 			uiOut.Warn("awg-quick down failed")
+		}
+	case "OpenVPN (server)", "OpenVPN (client)":
+		role := "server"
+		if strings.Contains(t.Type, "client") {
+			role = "client"
+		}
+		serviceName := fmt.Sprintf("openvpn-%s@%s", role, t.Name)
+		if err := sys.Run("systemctl", "stop", serviceName); err != nil {
+			uiOut.Warn(fmt.Sprintf("failed to stop %s", serviceName))
 		}
 	case "StaticXFRM", "VXLAN", "GRE":
 		if err := sys.Run("ifdown", t.Interface); err != nil {
@@ -313,6 +386,8 @@ func structuredEditTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) 
 		err = editIfupdownTunnel(uiOut, prompter, t)
 	case "XFRM":
 		err = editXfrmTunnel(uiOut, prompter, t)
+	case "OpenVPN (server)", "OpenVPN (client)":
+		err = editOpenVPNTunnel(uiOut, prompter, t)
 	default:
 		uiOut.Warn("Interactive edit not supported for " + t.Type)
 		return editTunnelConfig(uiOut, prompter, t)
@@ -718,6 +793,125 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 	return os.WriteFile(t.MainConfig, []byte(connText), 0644)
 }
 
+func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error {
+	content, err := os.ReadFile(t.MainConfig)
+	if err != nil {
+		return err
+	}
+	text := string(content)
+
+	fields := []struct {
+		Label string
+		Regex *regexp.Regexp
+		Value string
+		Key   string
+	}{
+		{"Local Listen IP", regexp.MustCompile(`^local\s+([^\s]+)`), "", "local"},
+		{"Remote Underlay IP", regexp.MustCompile(`^remote\s+([^\s]+)`), "", "remote"},
+		{"Port", regexp.MustCompile(`^port\s+([0-9]+)`), "", "port"},
+		{"Inner IPs (ifconfig)", regexp.MustCompile(`^ifconfig\s+([^\n]+)`), "", "ifconfig"},
+		{"Peer Fingerprint", regexp.MustCompile(`^peer-fingerprint\s+"?([^"\n]+)"?`), "", "peer-fingerprint"},
+	}
+
+	lines := strings.Split(text, "\n")
+	for i, f := range fields {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			m := f.Regex.FindStringSubmatch(trimmed)
+			if len(m) > 1 {
+				fields[i].Value = m[1]
+				break
+			}
+		}
+	}
+
+	opts := make([]ui.Option, len(fields)+2)
+	opts[0] = ui.Option{Label: ">> Save Changes and Exit", Value: "save"}
+	opts[1] = ui.Option{Label: "!! Discard Changes and Back", Value: "discard"}
+	for i, f := range fields {
+		opts[i+2] = ui.Option{Label: fmt.Sprintf("%s: %s", f.Label, f.Value), Value: fmt.Sprintf("%d", i)}
+	}
+
+	for {
+		choice := ""
+		if err := askSelectRaw(prompter, "Interactive Editor (Select field to modify)", opts, &choice); err != nil {
+			return err
+		}
+		if choice == "save" {
+			break
+		}
+		if choice == "discard" {
+			return ErrAborted
+		}
+		idx := 0
+		fmt.Sscanf(choice, "%d", &idx)
+		f := &fields[idx]
+		newVal := f.Value
+		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
+			return err
+		}
+
+		f.Value = strings.TrimSpace(newVal)
+		opts[idx+2].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
+	}
+
+	var newLines []string
+	updatedFields := make(map[string]bool)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			newLines = append(newLines, line)
+			continue
+		}
+
+		replaced := false
+		for _, f := range fields {
+			if f.Value == "" {
+				continue
+			}
+			// If commented out peer-fingerprint, replace it
+			if f.Key == "peer-fingerprint" && strings.Contains(trimmed, "peer-fingerprint") {
+				newLines = append(newLines, fmt.Sprintf("%s \"%s\"", f.Key, f.Value))
+				updatedFields[f.Key] = true
+				replaced = true
+				break
+			}
+			// Regular replacement if matches pattern
+			if f.Regex.MatchString(trimmed) {
+				if f.Key == "peer-fingerprint" {
+					newLines = append(newLines, fmt.Sprintf("%s \"%s\"", f.Key, f.Value))
+				} else {
+					newLines = append(newLines, fmt.Sprintf("%s %s", f.Key, f.Value))
+				}
+				updatedFields[f.Key] = true
+				replaced = true
+				break
+			}
+		}
+
+		if !replaced {
+			newLines = append(newLines, line)
+		}
+	}
+
+	// Add missing fields if they weren't in the file
+	for _, f := range fields {
+		if f.Value != "" && !updatedFields[f.Key] {
+			if f.Key == "peer-fingerprint" {
+				newLines = append(newLines, fmt.Sprintf("%s \"%s\"", f.Key, f.Value))
+			} else {
+				newLines = append(newLines, fmt.Sprintf("%s %s", f.Key, f.Value))
+			}
+		}
+	}
+
+	return os.WriteFile(t.MainConfig, []byte(strings.Join(newLines, "\n")), 0644)
+}
+
 func editTunnelConfig(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -767,6 +961,12 @@ func deleteTunnel(uiOut *ui.UI, t ManagedTunnel) {
 		sys.Run("systemctl", "disable", "--now", "wg-quick@"+t.Interface)
 	case "AmneziaWG":
 		sys.Run("systemctl", "disable", "--now", "awg-quick@"+t.Interface)
+	case "OpenVPN (server)", "OpenVPN (client)":
+		role := "server"
+		if strings.Contains(t.Type, "client") {
+			role = "client"
+		}
+		sys.Run("systemctl", "disable", "--now", fmt.Sprintf("openvpn-%s@%s", role, t.Name))
 	}
 
 	// Bring down first to be safe
