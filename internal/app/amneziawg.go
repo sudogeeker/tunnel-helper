@@ -479,26 +479,57 @@ func installAwgModule(uiOut *ui.UI, prompter *ui.Prompter) error {
 }
 
 func installAwgTools(uiOut *ui.UI, prompter *ui.Prompter) error {
-	if err := ensureBuildDeps(uiOut); err != nil {
-		return err
-	}
-	// Install Tools
-	uiOut.Info("Cloning amneziawg-tools...")
-	os.RemoveAll("/tmp/amneziawg-tools")
-	if err := sys.Run("git", "clone", "https://github.com/amnezia-vpn/amneziawg-tools.git", "/tmp/amneziawg-tools"); err != nil {
-		return fmt.Errorf("failed to clone tools: %w", err)
-	}
+	for {
+		if err := ensureBuildDeps(uiOut); err != nil {
+			return err
+		}
 
-	uiOut.Info("Building tools...")
-	if err := sys.Run("make", "-C", "/tmp/amneziawg-tools/src"); err != nil {
-		return fmt.Errorf("failed to make tools: %w", err)
-	}
+		uiOut.Info("Cloning amneziawg-tools...")
+		toolsDir := "/tmp/amneziawg-tools"
+		os.RemoveAll(toolsDir)
 
-	uiOut.Info("Installing tools...")
-	if err := sys.Run("make", "-C", "/tmp/amneziawg-tools/src", "install"); err != nil {
-		return fmt.Errorf("failed to install tools: %w", err)
+		if err := sys.Run("git", "clone", "https://github.com/amnezia-vpn/amneziawg-tools.git", toolsDir); err != nil {
+			uiOut.Error("Failed to clone tools: " + err.Error())
+			if ok, _ := askConfirm(prompter, "Retry cloning?", true); ok {
+				continue
+			}
+			return fmt.Errorf("failed to clone tools: %w", err)
+		}
+
+		uiOut.Info("Building amneziawg-tools Debian package...")
+		buildCmd := exec.Command("dpkg-buildpackage", "-b", "-uc", "-us")
+		buildCmd.Dir = toolsDir
+		buildCmd.Stdout = os.Stdout
+		buildCmd.Stderr = os.Stderr
+
+		if err := buildCmd.Run(); err != nil {
+			uiOut.Warn("Debian package build failed. Falling back to make install...")
+			if err := sys.Run("make", "-C", filepath.Join(toolsDir, "src")); err != nil {
+				return fmt.Errorf("failed to make tools: %w", err)
+			}
+			if err := sys.Run("make", "-C", filepath.Join(toolsDir, "src"), "install"); err != nil {
+				return fmt.Errorf("failed to install tools: %w", err)
+			}
+		} else {
+			uiOut.Info("Installing generated Debian packages...")
+			// dpkg-buildpackage puts the .deb files in the parent directory (/tmp)
+			installCmd := exec.Command("bash", "-c", "apt install -y /tmp/amneziawg*.deb")
+			installCmd.Stdout = os.Stdout
+			installCmd.Stderr = os.Stderr
+			if err := installCmd.Run(); err != nil {
+				uiOut.Error("Failed to install the .deb packages: " + err.Error())
+				if ok, _ := askConfirm(prompter, "Retry installation process?", true); ok {
+					continue
+				}
+				return fmt.Errorf("deb installation failed: %w", err)
+			}
+		}
+
+		// Clean up
+		os.RemoveAll(toolsDir)
+		exec.Command("bash", "-c", "rm -f /tmp/amneziawg*.deb /tmp/amneziawg*.buildinfo /tmp/amneziawg*.changes").Run()
+		return nil
 	}
-	return nil
 }
 
 func ensureBuildDeps(uiOut *ui.UI) error {
@@ -506,7 +537,7 @@ func ensureBuildDeps(uiOut *ui.UI) error {
 		return errors.New("apt not found; install build-essential, git, dkms manually")
 	}
 	uiOut.Info("Installing build dependencies...")
-	args := []string{"install", "-y", "build-essential", "git", "make", "dkms"}
+	args := []string{"install", "-y", "build-essential", "git", "make", "dkms", "debhelper", "pkg-config", "dpkg-dev"}
 	return sys.Run("apt", args...)
 }
 
