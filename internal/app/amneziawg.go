@@ -64,26 +64,44 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 		AwgDir: "/etc/amnezia/amneziawg",
 	}
 
-	if err := requireCommands(uiOut, "awg", "awg-quick"); err != nil {
-		uiOut.Warn("AmneziaWG not installed (missing awg or awg-quick).")
-		ok, err := askConfirm(prompter, "Compile and install AmneziaWG from source?", false)
-		if err != nil {
-			return err
-		}
-		if ok {
-			if err := installAmneziaWG(uiOut, prompter); err != nil {
-				return fmt.Errorf("failed to install AmneziaWG: %w", err)
-			}
-			uiOut.Ok("AmneziaWG installed")
-		} else {
-			return errors.New("missing awg command")
-		}
-	}
-
 	uiOut.HR()
 	uiOut.Title("AmneziaWG (awg-quick) Tunnel Generator")
 	uiOut.Dim("WireGuard fork with obfuscation to bypass DPI")
 	uiOut.HR()
+
+	// 1. 独立检测模块和工具
+	hasModule := sys.Run("modprobe", "-n", "amneziawg") == nil
+	hasTools := requireCommands(nil, "awg", "awg-quick") == nil
+
+	if !hasModule || !hasTools {
+		if !hasModule && !hasTools {
+			uiOut.Warn("AmneziaWG kernel module and tools are both missing.")
+		} else if !hasModule {
+			uiOut.Warn("AmneziaWG kernel module is missing (driver not found).")
+		} else {
+			uiOut.Warn("AmneziaWG tools (awg/awg-quick) are missing.")
+		}
+
+		ok, err := askConfirm(prompter, "Install/Fix missing AmneziaWG components from source?", false)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if !hasModule {
+				if err := installAwgModule(uiOut, prompter); err != nil {
+					return err
+				}
+			}
+			if !hasTools {
+				if err := installAwgTools(uiOut, prompter); err != nil {
+					return err
+				}
+			}
+			uiOut.Ok("AmneziaWG components installed/repaired")
+		} else {
+			return errors.New("missing required AmneziaWG components")
+		}
+	}
 
 	name := "prod1"
 	if err := askInput(prompter, "Tunnel name (interface: awg-<name>)", &name, validateName); err != nil {
@@ -342,57 +360,10 @@ func askDefault(prompter *ui.Prompter, title, def string, validate func(string) 
 	return val
 }
 
-func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
-	if !sys.LookPath("apt") {
-		return errors.New("apt not found; install manually")
+func installAwgModule(uiOut *ui.UI, prompter *ui.Prompter) error {
+	if err := ensureBuildDeps(uiOut); err != nil {
+		return err
 	}
-
-	unameR, err := sys.Output("uname", "-r")
-	if err != nil {
-		return fmt.Errorf("failed to get uname -r: %w", err)
-	}
-	unameR = strings.TrimSpace(unameR)
-
-	uiOut.Info("Running apt update...")
-	sys.Run("apt", "update")
-
-	uiOut.Info("Installing build dependencies...")
-	deps := []string{"build-essential", "git", "make", "dkms"}
-	args := append([]string{"install", "-y"}, deps...)
-	if err := sys.Run("apt", args...); err != nil {
-		return fmt.Errorf("failed to install build dependencies: %w", err)
-	}
-
-	uiOut.Info("Attempting to install linux-headers for current kernel...")
-
-	// Check if headers might already be present
-	buildDir := "/lib/modules/" + unameR + "/build"
-	if _, err := os.Stat(buildDir); err == nil {
-		uiOut.Ok(fmt.Sprintf("Found existing kernel build directory at %s", buildDir))
-		uiOut.Info("Skipping linux-headers package installation.")
-	} else {
-		if err := sys.Run("apt", "install", "-y", "linux-headers-"+unameR); err != nil {
-			uiOut.Warn(fmt.Sprintf("Could not install linux-headers-%s.", unameR))
-			uiOut.Info("Attempting fallback: installing linux-headers-amd64 and linux-headers-generic...")
-			if errFallback := sys.Run("apt", "install", "-y", "linux-headers-amd64", "linux-headers-generic"); errFallback != nil {
-				uiOut.Warn("Fallback linux-headers installation failed.")
-			}
-
-			// Final check before complaining
-			if _, errCheck := os.Stat(buildDir); errCheck != nil {
-				uiOut.Warn("Could not locate kernel headers. If you are using a custom/mainline kernel (e.g. from a cloud provider),")
-				uiOut.Warn("the kernel module compilation will likely fail without the correct headers.")
-				ok, errAsk := askConfirm(prompter, "Continue with kernel module compilation anyway?", false)
-				if errAsk != nil {
-					return errAsk
-				}
-				if !ok {
-					return errors.New("aborted by user due to missing linux-headers")
-				}
-			}
-		}
-	}
-
 	// Install Kernel Module via DKMS
 	uiOut.Info("Cloning amneziawg-linux-kernel-module...")
 	srcDir := "/usr/src/amneziawg-1.0.0"
@@ -413,7 +384,13 @@ func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 		return fmt.Errorf("dkms install failed: %w", err)
 	}
 	uiOut.Ok("AmneziaWG kernel module installed via DKMS (Auto-update enabled)")
+	return nil
+}
 
+func installAwgTools(uiOut *ui.UI, prompter *ui.Prompter) error {
+	if err := ensureBuildDeps(uiOut); err != nil {
+		return err
+	}
 	// Install Tools
 	uiOut.Info("Cloning amneziawg-tools...")
 	os.RemoveAll("/tmp/amneziawg-tools")
@@ -430,8 +407,24 @@ func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	if err := sys.Run("make", "-C", "/tmp/amneziawg-tools/src", "install"); err != nil {
 		return fmt.Errorf("failed to install tools: %w", err)
 	}
-
 	return nil
+}
+
+func ensureBuildDeps(uiOut *ui.UI) error {
+	if !sys.LookPath("apt") {
+		return errors.New("apt not found; install build-essential, git, dkms manually")
+	}
+	uiOut.Info("Installing build dependencies...")
+	deps := []string{"build-essential", "git", "make", "dkms"}
+	return sys.Run("apt", "install", "-y", deps...)
+}
+
+func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
+	// Keep for backward compatibility if needed, but we use split functions now
+	if err := installAwgModule(uiOut, prompter); err != nil {
+		return err
+	}
+	return installAwgTools(uiOut, prompter)
 }
 
 func isAwgIfUsed(iface string) bool {
