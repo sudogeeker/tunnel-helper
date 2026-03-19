@@ -310,6 +310,9 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 
 	b.WriteString(fmt.Sprintf("ifconfig %s %s\n", cfg.LocalInner, cfg.RemoteInner))
 
+	// Allow remote peer to use a dynamic source port or IP (crucial for NAT/ephemeral ports)
+	b.WriteString("float\n")
+
 	// Modern Ciphers
 	b.WriteString("cipher AES-256-GCM\n")
 	b.WriteString("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\n")
