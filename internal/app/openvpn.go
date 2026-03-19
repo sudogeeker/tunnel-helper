@@ -329,6 +329,7 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 	} else {
 		if cfg.Role == "listener" {
 			b.WriteString("tls-server\n")
+			b.WriteString("dh none\n")
 		} else {
 			b.WriteString("tls-client\n")
 		}
