@@ -357,7 +357,7 @@ func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	sys.Run("apt", "update")
 
 	uiOut.Info("Installing build dependencies...")
-	deps := []string{"build-essential", "git", "make"}
+	deps := []string{"build-essential", "git", "make", "dkms"}
 	args := append([]string{"install", "-y"}, deps...)
 	if err := sys.Run("apt", args...); err != nil {
 		return fmt.Errorf("failed to install build dependencies: %w", err)
@@ -393,22 +393,26 @@ func installAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 		}
 	}
 
-	// Install Kernel Module
+	// Install Kernel Module via DKMS
 	uiOut.Info("Cloning amneziawg-linux-kernel-module...")
-	os.RemoveAll("/tmp/amneziawg-linux-kernel-module")
-	if err := sys.Run("git", "clone", "https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git", "/tmp/amneziawg-linux-kernel-module"); err != nil {
+	srcDir := "/usr/src/amneziawg-1.0.0"
+	os.RemoveAll(srcDir)
+	if err := sys.Run("git", "clone", "https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git", srcDir); err != nil {
 		return fmt.Errorf("failed to clone kernel module: %w", err)
 	}
 
-	uiOut.Info("Building kernel module...")
-	if err := sys.Run("make", "-C", "/tmp/amneziawg-linux-kernel-module/src", "module"); err != nil {
-		return fmt.Errorf("failed to make kernel module: %w", err)
+	uiOut.Info("Registering and building AmneziaWG via DKMS...")
+	sys.Run("dkms", "remove", "amneziawg/1.0.0", "--all") // 清理旧版本
+	if err := sys.Run("dkms", "add", "amneziawg/1.0.0"); err != nil {
+		return fmt.Errorf("dkms add failed: %w", err)
 	}
-
-	uiOut.Info("Installing kernel module...")
-	if err := sys.Run("make", "-C", "/tmp/amneziawg-linux-kernel-module/src", "module-install"); err != nil {
-		return fmt.Errorf("failed to install kernel module: %w", err)
+	if err := sys.Run("dkms", "build", "amneziawg/1.0.0"); err != nil {
+		return fmt.Errorf("dkms build failed: %w", err)
 	}
+	if err := sys.Run("dkms", "install", "amneziawg/1.0.0"); err != nil {
+		return fmt.Errorf("dkms install failed: %w", err)
+	}
+	uiOut.Ok("AmneziaWG kernel module installed via DKMS (Auto-update enabled)")
 
 	// Install Tools
 	uiOut.Info("Cloning amneziawg-tools...")
