@@ -287,6 +287,13 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 
 	b.WriteString(fmt.Sprintf("ifconfig %s %s\n", cfg.LocalInner, cfg.RemoteInner))
 
+	// Performance Optimizations
+	b.WriteString("sndbuf 0\n")
+	b.WriteString("rcvbuf 0\n")
+	b.WriteString("fast-io\n")
+	b.WriteString("tun-mtu 1420\n")
+	b.WriteString("txqueuelen 10000\n")
+
 	// Allow remote peer to use a dynamic source port or IP (crucial for NAT/ephemeral ports)
 	b.WriteString("float\n")
 
