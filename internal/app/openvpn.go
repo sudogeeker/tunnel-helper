@@ -20,6 +20,7 @@ type OpenVPNConfig struct {
 	Iface                string
 	LocalInner           string
 	RemoteInner          string
+	MTU                  string
 	DCO                  bool
 	AuthMethod           string // "rpk"
 	RPKLocalCertPath     string
@@ -189,6 +190,13 @@ func collectOpenVPNInputs(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.Prompte
 	}
 	cfg.RemoteInner = remoteInner
 
+	// MTU
+	mtu := "1420"
+	if err := askInput(prompter, "MTU (e.g., 1420)", &mtu, validateNumber); err != nil {
+		return err
+	}
+	cfg.MTU = mtu
+
 	// DCO
 	dco, err := askConfirm(prompter, "Enable DCO (Data Channel Offload)? [Highly Recommended]", true)
 	if err != nil {
@@ -291,7 +299,9 @@ func writeOpenVPNConfig(cfg *OpenVPNConfig, uiOut *ui.UI) error {
 	b.WriteString("sndbuf 0\n")
 	b.WriteString("rcvbuf 0\n")
 	b.WriteString("fast-io\n")
-	b.WriteString("tun-mtu 1420\n")
+	if cfg.MTU != "" {
+		b.WriteString(fmt.Sprintf("tun-mtu %s\n", cfg.MTU))
+	}
 	b.WriteString("txqueuelen 10000\n")
 
 	// Allow remote peer to use a dynamic source port or IP (crucial for NAT/ephemeral ports)

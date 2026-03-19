@@ -809,6 +809,7 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 		{"Local Listen IP", regexp.MustCompile(`^local\s+([^\s]+)`), "", "local"},
 		{"Remote Underlay IP", regexp.MustCompile(`^remote\s+([^\s]+)`), "", "remote"},
 		{"Port", regexp.MustCompile(`^port\s+([0-9]+)`), "", "port"},
+		{"MTU", regexp.MustCompile(`^tun-mtu\s+([0-9]+)`), "", "tun-mtu"},
 		{"Inner IPs (ifconfig)", regexp.MustCompile(`^ifconfig\s+([^\n]+)`), "", "ifconfig"},
 		{"Peer Fingerprint", regexp.MustCompile(`^peer-fingerprint\s+"?([^"\n]+)"?`), "", "peer-fingerprint"},
 	}
