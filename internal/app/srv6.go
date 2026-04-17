@@ -36,9 +36,17 @@ const (
 )
 
 func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
+	defIface := defaultDev(6)
+	if defIface == "" {
+		defIface = defaultDev(4)
+	}
+	if defIface == "" {
+		defIface = "eth0"
+	}
+
 	config := SRv6Config{
 		BaseURL: "https://cira.moedove.com",
-		Iface:   "eth0",
+		Iface:   defIface,
 		TableID: 100,
 		Carriers: []CarrierConfig{
 			{"chinamobile", "", "", 1500},
@@ -59,7 +67,7 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	// 2. Interface
-	if err := askInput(prompter, "Outbound interface (e.g., eth0)", &config.Iface, nil); err != nil {
+	if err := askInput(prompter, fmt.Sprintf("Outbound interface (default %s)", defIface), &config.Iface, validateDeviceName); err != nil {
 		return err
 	}
 
@@ -122,6 +130,25 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	uiOut.Info("Syncing tunnel files and applying SRv6 tunnel...")
 	
+	// Validate interface exists, fallback to default if not
+	if _, err := sys.Output("ip", "link", "show", "dev", config.Iface); err != nil {
+		uiOut.Warn(fmt.Sprintf("Interface %s not found, attempting to auto-detect...", config.Iface))
+		defIface := defaultDev(6)
+		if defIface == "" {
+			defIface = defaultDev(4)
+		}
+		if defIface == "" {
+			return fmt.Errorf("failed to detect default interface to replace %s", config.Iface)
+		}
+		uiOut.Info(fmt.Sprintf("Auto-detected interface: %s", defIface))
+		config.Iface = defIface
+		
+		// Attempt to save the corrected interface back to config
+		if b, err := json.MarshalIndent(config, "", "  "); err == nil {
+			os.WriteFile(SRv6ConfigFile, b, 0644)
+		}
+	}
+
 	tmpDir, err := os.MkdirTemp("", "srv6_routes_*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
@@ -143,7 +170,9 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 
 	uiOut.Dim(fmt.Sprintf("Flushing and preparing routing table %s...", tableStr))
 	if out, err := sys.Output("ip", "-6", "route", "flush", "table", tableStr); err != nil {
-		uiOut.Warn(fmt.Sprintf("Warning: flush table %s failed: %v %s", tableStr, err, out))
+		if !strings.Contains(out, "FIB table does not exist") && !strings.Contains(err.Error(), "FIB table does not exist") {
+			uiOut.Warn(fmt.Sprintf("Warning: flush table %s failed: %v %s", tableStr, err, out))
+		}
 	}
 	
 	var routeArgs []string
