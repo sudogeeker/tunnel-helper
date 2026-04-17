@@ -177,16 +177,14 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 		}
 	}
 	
-	var routeArgs []string
-	if gw != "" {
-		routeArgs = []string{"-6", "route", "replace", "default", "via", gw, "dev", config.Iface, "table", tableStr, "onlink"}
-	} else {
-		routeArgs = []string{"-6", "route", "replace", "default", "dev", config.Iface, "table", tableStr}
+	// Add generic rule for the table if it doesn't exist
+	// Use priority 30000 as recommended
+	uiOut.Dim(fmt.Sprintf("Adding generic routing rule for table %s...", tableStr))
+	for i := 0; i < 10; i++ {
+		sys.Output("ip", "-6", "rule", "del", "priority", "30000", "table", tableStr)
 	}
-	
-	uiOut.Dim(fmt.Sprintf("Adding default route to table %s: ip %s", tableStr, strings.Join(routeArgs, " ")))
-	if out, err := sys.Output("ip", routeArgs...); err != nil {
-		return fmt.Errorf("failed to add default route to table %s: %v (%s)", tableStr, err, out)
+	if out, err := sys.Output("ip", "-6", "rule", "add", "priority", "30000", "table", tableStr); err != nil {
+		uiOut.Warn(fmt.Sprintf("Failed to add generic routing rule: %v (%s)", err, out))
 	}
 
 	// Collect unique SIDs to avoid redundant rule operations
@@ -271,7 +269,7 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 			}
 
 			batchFile := filepath.Join(tmpDir, "batch_"+fileName)
-			if err := generateBatchFile(localPath, batchFile, config.Iface, sid, c.MTU); err != nil {
+			if err := generateBatchFile(localPath, batchFile, config.Iface, sid, tableStr, c.MTU); err != nil {
 				uiOut.Warn(fmt.Sprintf("Failed to generate batch file for %s: %v", fileName, err))
 				continue
 			}
@@ -308,7 +306,7 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	return nil
 }
 
-func generateBatchFile(src, dst, iface, sid string, mtu int) error {
+func generateBatchFile(src, dst, iface, sid, table string, mtu int) error {
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -327,8 +325,8 @@ func generateBatchFile(src, dst, iface, sid string, mtu int) error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// route replace <CIDR> dev <IFACE> encap seg6 mode encap segs <SID> mtu <MTU>
-		fmt.Fprintf(out, "route replace %s dev %s encap seg6 mode encap segs %s mtu %d\n", line, iface, sid, mtu)
+		// route replace <CIDR> dev <IFACE> encap seg6 mode encap segs <SID> mtu <MTU> table <TABLE>
+		fmt.Fprintf(out, "route replace %s dev %s encap seg6 mode encap segs %s mtu %d table %s\n", line, iface, sid, mtu, table)
 	}
 	return scanner.Err()
 }
@@ -467,7 +465,39 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 				return err
 			}
 			if ok {
-				uiOut.Info("Deleting SRv6 Tunnel...")
+				uiOut.Info("Deleting SRv6 Tunnel and cleaning up rules...")
+				
+				tid := config.TableID
+				if tid == 0 {
+					tid = 100
+				}
+				tableStr := fmt.Sprintf("%d", tid)
+
+				// Cleanup rules
+				for i := 0; i < 10; i++ {
+					sys.Output("ip", "-6", "rule", "del", "priority", "30000", "table", tableStr)
+				}
+				
+				uniqueSIDs := make(map[string]bool)
+				for _, c := range config.Carriers {
+					if c.SIDV4 != "" && c.SIDV4 != "::" {
+						uniqueSIDs[c.SIDV4] = true
+					}
+					if c.SIDV6 != "" && c.SIDV6 != "::" {
+						uniqueSIDs[c.SIDV6] = true
+					}
+				}
+				for sid := range uniqueSIDs {
+					for i := 0; i < 100; i++ {
+						if _, err := sys.Output("ip", "-6", "rule", "del", "to", sid, "table", tableStr); err != nil {
+							break
+						}
+					}
+				}
+
+				// Flush table
+				sys.Output("ip", "-6", "route", "flush", "table", tableStr)
+
 				sys.Run("systemctl", "disable", "--now", "srv6-tunnels.service")
 				os.Remove(SRv6Service)
 				os.RemoveAll(SRv6WorkDir)
