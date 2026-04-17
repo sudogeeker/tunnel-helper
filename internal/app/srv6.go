@@ -58,7 +58,9 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 
 	// Load existing if exists
 	if b, err := os.ReadFile(SRv6ConfigFile); err == nil {
-		json.Unmarshal(b, &config)
+		if err := json.Unmarshal(b, &config); err == nil {
+			return editSRv6(uiOut, prompter, &config)
+		}
 	}
 
 	// 1. Base URL
