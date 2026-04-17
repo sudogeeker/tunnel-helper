@@ -427,14 +427,16 @@ func structuredEditTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) 
 		return err
 	}
 
-	// Restart interface if changed
-	ok, err := askConfirm(prompter, "Configuration updated. Restart interface now?", true)
-	if err != nil {
-		return err
-	}
-	if ok {
-		bringTunnelDown(uiOut, t)
-		bringTunnelUp(uiOut, t)
+	// Restart interface if changed, except for SRv6 which handles its own updates
+	if t.Type != "SRv6" {
+		ok, err := askConfirm(prompter, "Configuration updated. Restart interface now?", true)
+		if err != nil {
+			return err
+		}
+		if ok {
+			bringTunnelDown(uiOut, t)
+			bringTunnelUp(uiOut, t)
+		}
 	}
 
 	return nil
