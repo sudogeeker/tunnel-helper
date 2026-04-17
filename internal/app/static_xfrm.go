@@ -156,12 +156,7 @@ func collectStaticXfrmInputs(cfg *StaticXfrmConfig, uiOut *ui.UI, prompter *ui.P
 
 	// MTU
 	mtu := "1400"
-	if err := askInput(prompter, "Interface MTU (default 1400)", &mtu, func(v string) error {
-		if v != "" && !isDigits(v) {
-			return errors.New("must be a number")
-		}
-		return nil
-	}); err != nil {
+	if err := askInput(prompter, "Interface MTU (default 1400)", &mtu, validateMTU); err != nil {
 		return err
 	}
 	if mtu == "" {

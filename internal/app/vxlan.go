@@ -20,6 +20,7 @@ type VxlanConfig struct {
 	LocalUnder  string
 	InnerFam    int
 	InnerCIDR   string
+	MTU         string
 	IfaceDir    string
 	IfaceFile   string
 }
@@ -104,6 +105,15 @@ func runVXLAN(uiOut *ui.UI, prompter *ui.Prompter) error {
 		cfg.InnerCIDR = inner
 	}
 
+	mtu := "1450"
+	if err := askInput(prompter, "MTU (default 1450)", &mtu, validateNumber); err != nil {
+		return err
+	}
+	if mtu == "" {
+		mtu = "1450"
+	}
+	cfg.MTU = mtu
+
 	cfg.IfaceFile = filepath.Join(cfg.IfaceDir, cfg.Name+".cfg")
 
 	if fileExists(cfg.IfaceFile) {
@@ -158,7 +168,7 @@ func buildVxlanIface(cfg *VxlanConfig) string {
 	}
 
 	fmt.Fprintf(&b, "    pre-up  ip link add %s type vxlan id %s local %s remote %s dstport 4789 dev %s || true\n", cfg.Name, cfg.VNI, cfg.LocalUnder, cfg.RemoteUnder, cfg.Device)
-	fmt.Fprintf(&b, "    pre-up  ip link set %s up\n", cfg.Name)
+	fmt.Fprintf(&b, "    pre-up  ip link set %s up mtu %s\n", cfg.Name, cfg.MTU)
 
 	if cfg.InnerFam == 6 {
 		fmt.Fprintf(&b, "    post-up ip -6 addr replace %s dev %s 2>/dev/null || true\n", cfg.InnerCIDR, cfg.Name)

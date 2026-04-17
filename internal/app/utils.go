@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -145,6 +146,43 @@ func validateCIDR(fam int) func(string) error {
 	}
 }
 
+func validateAnyIP(value string) error {
+	value = normalizeAnyToken(value)
+	if value == "" {
+		return nil
+	}
+	if isAny(value) {
+		return nil
+	}
+	// Try parsing as IP
+	if net.ParseIP(value) != nil {
+		return nil
+	}
+	// Try parsing as Host (for Endpoint)
+	host, _, err := net.SplitHostPort(value)
+	if err == nil {
+		if net.ParseIP(host) != nil || validateName(host) == nil {
+			return nil
+		}
+	}
+	if validateName(value) == nil {
+		return nil
+	}
+	return errors.New("invalid IP address or hostname")
+}
+
+func validateAnyCIDR(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	_, _, err := net.ParseCIDR(value)
+	if err != nil {
+		return errors.New("invalid CIDR (expected e.g. 10.0.0.1/24 or fd00::1/64)")
+	}
+	return nil
+}
+
 func validateName(value string) error {
 	if strings.TrimSpace(value) == "" {
 		return errors.New("name is required")
@@ -163,6 +201,21 @@ func validateNumber(value string) error {
 	}
 	if !isDigits(value) {
 		return errors.New("must be a number")
+	}
+	return nil
+}
+
+func validateMTU(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return errors.New("must be a number")
+	}
+	if n < 68 || n > 65535 {
+		return errors.New("MTU must be between 68 and 65535")
 	}
 	return nil
 }

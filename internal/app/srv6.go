@@ -94,7 +94,7 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 			return err
 		}
 		mtuStr := fmt.Sprintf("%d", c.MTU)
-		if err := askInput(prompter, "MTU", &mtuStr, validateNumber); err != nil {
+		if err := askInput(prompter, "MTU", &mtuStr, validateMTU); err != nil {
 			return err
 		}
 		fmt.Sscanf(mtuStr, "%d", &c.MTU)
@@ -203,7 +203,8 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	for sid := range uniqueSIDs {
 		uiOut.Dim(fmt.Sprintf("Setting up privileged routing for SID: %s", sid))
 		// Delete all existing rules for this SID and table to prevent duplicates
-		for {
+		// Limit to 100 iterations as a safety break
+		for i := 0; i < 100; i++ {
 			if _, err := sys.Output("ip", "-6", "rule", "del", "to", sid, "table", tableStr); err != nil {
 				break
 			}
@@ -523,7 +524,7 @@ func editCarriers(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error
 				askInput(prompter, "SID V6", &c.SIDV6, nil)
 			case "mtu":
 				mtuStr := fmt.Sprintf("%d", c.MTU)
-				askInput(prompter, "MTU", &mtuStr, validateNumber)
+				askInput(prompter, "MTU", &mtuStr, validateMTU)
 				fmt.Sscanf(mtuStr, "%d", &c.MTU)
 			}
 		}

@@ -526,11 +526,22 @@ func editWgLikeTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) erro
 		f := &fields[idx]
 
 		newVal := f.Value
-		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
+		var validator func(string) error
+		switch f.Key {
+		case "Address":
+			validator = validateAnyCIDR
+		case "Endpoint", "Local", "Remote":
+			validator = validateAnyIP
+		case "ListenPort", "PersistentKeepalive", "VNI", "id":
+			validator = validateNumber
+		case "MTU":
+			validator = validateMTU
+		}
+		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, validator); err != nil {
 			return err
 		}
 		f.Value = strings.TrimSpace(newVal)
-		opts[idx].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
+		opts[idx+2].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
 	}
 
 	// Reconstruct or update
@@ -629,23 +640,23 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 
 	// 锁定前缀，防止误匹配（例如防止 id 匹配到 if_id）
 	fields := []field{
-		{"Local Underlay", regexp.MustCompile(`\s+local\s+([^\s]+)`), "", "local"},
-		{"Remote Underlay", regexp.MustCompile(`\s+remote\s+([^\s]+)`), "", "remote"},
-		{"Inner CIDR", regexp.MustCompile(`replace\s+([^\s/]+/[0-9]+)`), "", "replace"},
-		{"MTU", regexp.MustCompile(`\s+mtu\s+([0-9]+)`), "", "mtu"},
+		{"Local Underlay", regexp.MustCompile(`(?m)^\s*local\s+([^\s]+)`), "", "local"},
+		{"Remote Underlay", regexp.MustCompile(`(?m)^\s*remote\s+([^\s]+)`), "", "remote"},
+		{"Inner CIDR", regexp.MustCompile(`(?m)replace\s+([^\s/]+/[0-9]+)`), "", "replace"},
+		{"MTU", regexp.MustCompile(`(?m)^\s*mtu\s+([0-9]+)`), "", "mtu"},
 	}
 
 	if t.Type == "VXLAN" {
 		// 使用 \s+id\s+ 确保精准锁定 VXLAN ID，不被 if_id 干扰
-		fields = append(fields, field{"VNI", regexp.MustCompile(`\s+id\s+([0-9]+)`), "", "id"})
+		fields = append(fields, field{"VNI", regexp.MustCompile(`(?m)^\s*id\s+([0-9]+)`), "", "id"})
 	}
 
 	if t.Type == "StaticXFRM" {
 		fields = append(fields,
-			field{"SPI In", regexp.MustCompile(`spi\s+(0x[0-9a-fA-F]+)`), "", "spi"},
-			field{"SPI Out", regexp.MustCompile(`spi\s+(0x[0-9a-fA-F]+)`), "", "spi"},
-			field{"Enc Key In", regexp.MustCompile(`0x([0-9a-fA-F]{32,})`), "", "0x"},
-			field{"Enc Key Out", regexp.MustCompile(`0x([0-9a-fA-F]{32,})`), "", "0x"},
+			field{"SPI In", regexp.MustCompile(`(?m)spi\s+(0x[0-9a-fA-F]+)`), "", "spi"},
+			field{"SPI Out", regexp.MustCompile(`(?m)spi\s+(0x[0-9a-fA-F]+)`), "", "spi"},
+			field{"Enc Key In", regexp.MustCompile(`(?m)0x([0-9a-fA-F]{32,})`), "", "0x"},
+			field{"Enc Key Out", regexp.MustCompile(`(?m)0x([0-9a-fA-F]{32,})`), "", "0x"},
 		)
 	}
 
@@ -699,30 +710,64 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 		fmt.Sscanf(choice, "%d", &idx)
 		f := &fields[idx]
 		newVal := f.Value
-		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
+		var validator func(string) error
+		// Map based on Label/Key
+		switch {
+		case strings.Contains(strings.ToLower(f.Label), "mtu"):
+			validator = validateMTU
+		case strings.Contains(strings.ToLower(f.Label), "cidr"):
+			validator = validateAnyCIDR
+		case strings.Contains(strings.ToLower(f.Label), "underlay"), strings.Contains(strings.ToLower(f.Label), "id"), f.Key == "local", f.Key == "remote":
+			// For XFRM, Local ID/Remote ID are usually IPs but could be hostnames
+			validator = validateAnyIP
+		case f.Key == "id" || f.Key == "vni":
+			validator = validateNumber
+		}
+		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, validator); err != nil {
 			return err
 		}
 
 		f.Value = strings.TrimSpace(newVal)
 		opts[idx+2].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
 	}
+// 统一在最后执行替换逻辑，使用精准匹配防止串位
+for _, f := range fields {
+	if f.Value == "" {
+		continue
+	}
 
-	// 统一在最后执行替换逻辑
-	for _, f := range fields {
-		// 寻找该字段在 text 中的原始值并替换（这里需要根据 Regex 找到当前值）
-		// 为了简单且鲁棒，我们重新解析 text
-		m := f.Regex.FindStringSubmatch(text)
-		if len(m) > 1 {
-			oldInFile := m[1]
-			if oldInFile == f.Value {
-				continue
+	// 检查是否存在匹配
+	if f.Regex.MatchString(text) {
+		// 对于 Inner CIDR 等可能出现多次的字段，使用全局替换
+		// 我们需要保持前缀不变，只替换捕获组内容
+		text = f.Regex.ReplaceAllStringFunc(text, func(match string) string {
+			submatches := f.Regex.FindStringSubmatchIndex(match)
+			if len(submatches) > 1 {
+				start, end := submatches[len(submatches)-2], submatches[len(submatches)-1]
+				return match[:start] + f.Value + match[end:]
 			}
-			// 执行替换
-			if f.Key != "" && f.Key != "0x" {
-				pattern := regexp.MustCompile(`(` + regexp.QuoteMeta(f.Key) + `\s+)` + regexp.QuoteMeta(oldInFile))
-				text = pattern.ReplaceAllString(text, `${1}`+f.Value)
-			} else {
-				text = strings.ReplaceAll(text, oldInFile, f.Value)
+			return match
+		})
+	} else {
+		// 没找到该字段（比如原本没设置 MTU），则需要新增
+		if f.Label == "MTU" {
+...
+				// 寻找 iface 行，在其后插入 mtu
+				lines := strings.Split(text, "\n")
+				var newLines []string
+				added := false
+				for _, line := range lines {
+					newLines = append(newLines, line)
+					if !added && strings.HasPrefix(strings.TrimSpace(line), "iface ") {
+						newLines = append(newLines, "    mtu "+f.Value)
+						added = true
+					}
+				}
+				if added {
+					text = strings.Join(newLines, "\n")
+				} else {
+					text = text + "\n    mtu " + f.Value
+				}
 			}
 		}
 	}
@@ -743,10 +788,10 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 		Value string
 		File  string
 	}{
-		{"Local Underlay", regexp.MustCompile(`local_addrs\s*=\s*([^\s\n]+)`), "", t.MainConfig},
-		{"Remote Underlay", regexp.MustCompile(`remote_addrs\s*=\s*([^\s\n]+)`), "", t.MainConfig},
-		{"Local ID", regexp.MustCompile(`(?s)local\s*\{[^}]*id\s*=\s*([^\s\n"}]+)`), "", t.MainConfig},
-		{"Remote ID", regexp.MustCompile(`(?s)remote\s*\{[^}]*id\s*=\s*([^\s\n"}]+)`), "", t.MainConfig},
+		{"Local Underlay", regexp.MustCompile(`(?m)^\s*local_addrs\s*=\s*([^\s\n]+)`), "", t.MainConfig},
+		{"Remote Underlay", regexp.MustCompile(`(?m)^\s*remote_addrs\s*=\s*([^\s\n]+)`), "", t.MainConfig},
+		{"Local ID", regexp.MustCompile(`(?s)local\s*\{[^}]*id\s*=\s*"([^"}]+)"`), "", t.MainConfig},
+		{"Remote ID", regexp.MustCompile(`(?s)remote\s*\{[^}]*id\s*=\s*"([^"}]+)"`), "", t.MainConfig},
 	}
 
 	for i, f := range fields {
@@ -779,6 +824,19 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 			Value string
 			File  string
 		}{"Inner CIDR", regexp.MustCompile(`replace\s+([^\s/]+/[0-9]+)`), val, cfgFile})
+
+		// Add MTU
+		m = regexp.MustCompile(`mtu\s+([0-9]+)`).FindStringSubmatch(cfgText)
+		mtuVal := ""
+		if len(m) > 1 {
+			mtuVal = m[1]
+		}
+		fields = append(fields, struct {
+			Label string
+			Regex *regexp.Regexp
+			Value string
+			File  string
+		}{"MTU", regexp.MustCompile(`mtu\s+([0-9]+)`), mtuVal, cfgFile})
 	}
 
 	opts := make([]ui.Option, len(fields)+2)
@@ -803,7 +861,20 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 		fmt.Sscanf(choice, "%d", &idx)
 		f := &fields[idx]
 		newVal := f.Value
-		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
+		var validator func(string) error
+		// Map based on Label/Key
+		switch {
+		case strings.Contains(strings.ToLower(f.Label), "mtu"):
+			validator = validateMTU
+		case strings.Contains(strings.ToLower(f.Label), "cidr"):
+			validator = validateAnyCIDR
+		case strings.Contains(strings.ToLower(f.Label), "underlay"), strings.Contains(strings.ToLower(f.Label), "id"), f.Key == "local", f.Key == "remote":
+			// For XFRM, Local ID/Remote ID are usually IPs but could be hostnames
+			validator = validateAnyIP
+		case f.Key == "id" || f.Key == "vni":
+			validator = validateNumber
+		}
+		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, validator); err != nil {
 			return err
 		}
 		f.Value = strings.TrimSpace(newVal)
@@ -811,25 +882,43 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 	}
 
 	// 执行最后的保存逻辑
+	// 注意：由于可能修改多个字段且文件分散在 .conf 和 .cfg，需要小心处理
 	for _, f := range fields {
 		if f.File == t.MainConfig {
+			// 重新匹配以获取最新位置
 			m := f.Regex.FindStringSubmatchIndex(connText)
-			if len(m) > 1 {
+			if len(m) > 3 {
 				currentVal := connText[m[2]:m[3]]
 				if currentVal != f.Value {
 					connText = connText[:m[2]] + f.Value + connText[m[3]:]
 				}
 			}
 		} else {
-			// Update .cfg file
+			// Update .cfg file (e.g. Inner CIDR or MTU)
 			cfgContent, _ := os.ReadFile(f.File)
 			cfgText := string(cfgContent)
 			m := f.Regex.FindStringSubmatchIndex(cfgText)
 			if len(m) > 1 {
-				currentVal := cfgText[m[2]:m[3]]
+				start, end := m[len(m)-2], m[len(m)-1]
+				currentVal := cfgText[start:end]
 				if currentVal != f.Value {
-					cfgText = cfgText[:m[2]] + f.Value + cfgText[m[3]:]
+					cfgText = cfgText[:start] + f.Value + cfgText[end:]
 					os.WriteFile(f.File, []byte(cfgText), 0600)
+				}
+			} else if f.Label == "MTU" && f.Value != "" {
+				// 新增 MTU 行
+				lines := strings.Split(cfgText, "\n")
+				var newLines []string
+				added := false
+				for _, line := range lines {
+					newLines = append(newLines, line)
+					if !added && strings.HasPrefix(strings.TrimSpace(line), "iface ") {
+						newLines = append(newLines, "    mtu "+f.Value)
+						added = true
+					}
+				}
+				if added {
+					os.WriteFile(f.File, []byte(strings.Join(newLines, "\n")), 0600)
 				}
 			}
 		}
@@ -851,12 +940,12 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 		Value string
 		Key   string
 	}{
-		{"Local Listen IP", regexp.MustCompile(`^local\s+([^\s]+)`), "", "local"},
-		{"Remote Underlay IP", regexp.MustCompile(`^remote\s+([^\s]+)`), "", "remote"},
-		{"Port", regexp.MustCompile(`^port\s+([0-9]+)`), "", "port"},
-		{"MTU", regexp.MustCompile(`^tun-mtu\s+([0-9]+)`), "", "tun-mtu"},
+		{"Local Listen IP", regexp.MustCompile(`(?m)^local\s+([^\s]+)`), "", "local"},
+		{"Remote Underlay IP", regexp.MustCompile(`(?m)^remote\s+([^\s]+)`), "", "remote"},
+		{"Port", regexp.MustCompile(`(?m)^port\s+([0-9]+)`), "", "port"},
+		{"MTU", regexp.MustCompile(`(?m)^tun-mtu\s+([0-9]+)`), "", "tun-mtu"},
 		{"Inner IP", regexp.MustCompile(`ip addr add\s+([^\s]+)`), "", "inner"},
-		{"Peer Fingerprint", regexp.MustCompile(`^peer-fingerprint\s+"?([^"\n]+)"?`), "", "peer-fingerprint"},
+		{"Peer Fingerprint", regexp.MustCompile(`(?m)^peer-fingerprint\s+"?([^"\n]+)"?`), "", "peer-fingerprint"},
 	}
 
 	lines := strings.Split(text, "\n")
@@ -896,7 +985,18 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 		fmt.Sscanf(choice, "%d", &idx)
 		f := &fields[idx]
 		newVal := f.Value
-		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, nil); err != nil {
+		var validator func(string) error
+		switch f.Key {
+		case "tun-mtu":
+			validator = validateMTU
+		case "inner":
+			validator = validateAnyCIDR
+		case "local", "remote":
+			validator = validateAnyIP
+		case "port":
+			validator = validateNumber
+		}
+		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, validator); err != nil {
 			return err
 		}
 
@@ -915,21 +1015,13 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 		}
 
 		replaced := false
-		for _, f := range fields {
+		for i, f := range fields {
 			if f.Value == "" {
 				continue
 			}
-			if f.Key == "peer-fingerprint" && strings.Contains(trimmed, "peer-fingerprint") {
-				newLines = append(newLines, fmt.Sprintf("%s \"%s\"", f.Key, f.Value))
-				updatedFields[f.Key] = true
-				replaced = true
-				break
-			}
 			if f.Regex.MatchString(trimmed) {
 				if f.Key == "inner" {
-					// Handle special case for 'up' script line
-					newLine := f.Regex.ReplaceAllString(line, "ip addr add "+f.Value)
-					newLines = append(newLines, newLine)
+					newLines = append(newLines, f.Regex.ReplaceAllString(line, "ip addr add "+f.Value))
 				} else if f.Key == "peer-fingerprint" {
 					newLines = append(newLines, fmt.Sprintf("%s \"%s\"", f.Key, f.Value))
 				} else {
@@ -943,6 +1035,18 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 
 		if !replaced {
 			newLines = append(newLines, line)
+		}
+	}
+
+	for _, f := range fields {
+		if f.Value != "" && !updatedFields[f.Key] {
+			if f.Key == "inner" {
+				newLines = append(newLines, "script-security 2", fmt.Sprintf("up \"/bin/bash -c 'ip addr add %s dev $1'\"", f.Value))
+			} else if f.Key == "peer-fingerprint" {
+				newLines = append(newLines, fmt.Sprintf("%s \"%s\"", f.Key, f.Value))
+			} else {
+				newLines = append(newLines, fmt.Sprintf("%s %s", f.Key, f.Value))
+			}
 		}
 	}
 

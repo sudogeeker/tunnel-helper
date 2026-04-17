@@ -286,7 +286,7 @@ func runAmneziaWG(uiOut *ui.UI, prompter *ui.Prompter) error {
 	cfg.RemotePub = strings.TrimSpace(remotePub)
 
 	mtu := "1420"
-	if err := askInput(prompter, "MTU (blank = default 1420)", &mtu, validateNumber); err != nil {
+	if err := askInput(prompter, "MTU (blank = default 1420)", &mtu, validateMTU); err != nil {
 		return err
 	}
 	cfg.MTU = mtu

@@ -199,7 +199,7 @@ func collectOpenVPNInputs(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.Prompte
 
 	// MTU
 	mtu := "1420"
-	if err := askInput(prompter, "MTU", &mtu, validateNumber); err != nil {
+	if err := askInput(prompter, "MTU", &mtu, validateMTU); err != nil {
 		return err
 	}
 	cfg.MTU = mtu
@@ -255,7 +255,7 @@ func generateOpenVPNCredentials(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.P
 	if !fileExists(cfg.RPKLocalCertPath) || !fileExists(cfg.RPKLocalKeyPath) {
 		uiOut.Info("Generating local self-signed certificate for Peer Fingerprint...")
 		subj := fmt.Sprintf("/CN=%s", cfg.Iface)
-		cmd := fmt.Sprintf("openssl req -x509 -newkey ec:<(openssl ecparam -name prime256v1) -keyout %s -out %s -days 3650 -nodes -subj %s", cfg.RPKLocalKeyPath, cfg.RPKLocalCertPath, subj)
+		cmd := fmt.Sprintf("openssl req -x509 -newkey ec:<(openssl ecparam -name prime256v1) -keyout %s -out %s -days 3650 -nodes -subj \"%s\"", cfg.RPKLocalKeyPath, cfg.RPKLocalCertPath, subj)
 		if err := sys.Run("bash", "-c", cmd); err != nil {
 			return fmt.Errorf("failed to generate local cert/key: %w", err)
 		}

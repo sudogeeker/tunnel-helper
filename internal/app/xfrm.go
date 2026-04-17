@@ -57,6 +57,7 @@ type XfrmConfig struct {
 	DefaultDev       string
 	RouteDev         string
 	RouteSrc         string
+	MTU              string
 }
 
 const (
@@ -289,6 +290,15 @@ func collectXfrmInputs(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) err
 	cfg.XfrmIf = "ipsec-" + name
 	cfg.IfID = generateIfID(name)
 	uiOut.Info(fmt.Sprintf("generated if_id: %d", cfg.IfID))
+
+	mtu := "1400"
+	if err := askInput(prompter, "MTU (blank = default 1400)", &mtu, validateNumber); err != nil {
+		return err
+	}
+	if mtu == "" {
+		mtu = "1400"
+	}
+	cfg.MTU = mtu
 
 	if used := isIfIDUsed(cfg.IfID); used {
 		uiOut.Warn(fmt.Sprintf("if_id %d already in use", cfg.IfID))
@@ -974,7 +984,7 @@ func buildXfrmConn(cfg *XfrmConfig) string {
 	} else {
 		b.WriteString("            auth = psk\n")
 	}
-	fmt.Fprintf(&b, "            id = %s\n", cfg.LocalID)
+	fmt.Fprintf(&b, "            id = \"%s\"\n", cfg.LocalID)
 	b.WriteString("        }\n")
 	b.WriteString("        remote {\n")
 	if cfg.AuthMethod == AuthRPK {
@@ -983,10 +993,10 @@ func buildXfrmConn(cfg *XfrmConfig) string {
 	} else {
 		b.WriteString("            auth = psk\n")
 	}
-	fmt.Fprintf(&b, "            id = %s\n", cfg.RemoteID)
+	fmt.Fprintf(&b, "            id = \"%s\"\n", cfg.RemoteID)
 	b.WriteString("        }\n\n")
 	b.WriteString("        children {\n")
-	fmt.Fprintf(&b, "            %s-child {\n", cfg.Name)
+	fmt.Fprintf(&b, "            \"%s-child\" {\n", cfg.Name)
 	b.WriteString("                mode = tunnel\n")
 	b.WriteString("                local_ts = 0.0.0.0/0,::/0\n")
 	b.WriteString("                remote_ts = 0.0.0.0/0,::/0\n\n")
@@ -998,13 +1008,13 @@ func buildXfrmConn(cfg *XfrmConfig) string {
 	}
 	fmt.Fprintf(&b, "                start_action = %s\n", startAction)
 	b.WriteString("                close_action = trap\n\n")
-	fmt.Fprintf(&b, "                esp_proposals = %s\n", cfg.EspAlg)
+	fmt.Fprintf(&b, "                esp_proposals = \"%s\"\n", cfg.EspAlg)
 	b.WriteString("                rekey_time = 8h\n")
 	b.WriteString("                life_time = 10h\n")
 	b.WriteString("                dpd_action = clear\n")
 	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
-	fmt.Fprintf(&b, "        proposals = %s\n", cfg.IkeAlg)
+	fmt.Fprintf(&b, "        proposals = \"%s\"\n", cfg.IkeAlg)
 	b.WriteString("        rekey_time = 1h\n")
 	b.WriteString("        over_time = 90m\n")
 	b.WriteString("        dpd_delay = 60s\n")
@@ -1041,7 +1051,7 @@ func buildXfrmIface(cfg *XfrmConfig) string {
 		fmt.Fprintf(&b, "iface %s inet manual\n", cfg.XfrmIf)
 	}
 	fmt.Fprintf(&b, "    pre-up  ip link add %s type xfrm dev %s if_id %d || true\n", cfg.XfrmIf, cfg.Device, cfg.IfID)
-	fmt.Fprintf(&b, "    pre-up  ip link set %s multicast on up\n", cfg.XfrmIf)
+	fmt.Fprintf(&b, "    pre-up  ip link set %s multicast on up mtu %s\n", cfg.XfrmIf, cfg.MTU)
 	if cfg.InnerFam == 6 {
 		fmt.Fprintf(&b, "    post-up ip -6 addr replace %s dev %s 2>/dev/null || true\n", cfg.InnerCIDR, cfg.XfrmIf)
 		fmt.Fprintf(&b, "    pre-down ip -6 addr del %s dev %s 2>/dev/null || true\n", cfg.InnerCIDR, cfg.XfrmIf)
@@ -1082,6 +1092,7 @@ func printXfrmConfigSummary(cfg *XfrmConfig, uiOut *ui.UI) {
 	fmt.Fprintf(uiOut.Out, "Tunnel name: %s\n", cfg.Name)
 	fmt.Fprintf(uiOut.Out, "XFRM interface: %s\n", cfg.XfrmIf)
 	fmt.Fprintf(uiOut.Out, "if_id: %d\n", cfg.IfID)
+	fmt.Fprintf(uiOut.Out, "MTU: %s\n", cfg.MTU)
 	fmt.Fprintf(uiOut.Out, "Inner IP version: IPv%d\n", cfg.InnerFam)
 	fmt.Fprintf(uiOut.Out, "Inner CIDR: %s\n", cfg.InnerCIDR)
 	fmt.Fprintf(uiOut.Out, "Auth method: %s\n", authLabel)
