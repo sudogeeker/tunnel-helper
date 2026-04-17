@@ -253,9 +253,10 @@ func scanTunnels(xfrmConfDir string) ([]ManagedTunnel, error) {
 }
 
 func showTunnelStatus(uiOut *ui.UI, t ManagedTunnel) {
+	var out string
 	if t.Type != "SRv6" {
 		uiOut.Info("Interface status:")
-		out, _ := sys.Output("ip", "-d", "link", "show", t.Interface)
+		out, _ = sys.Output("ip", "-d", "link", "show", t.Interface)
 		if out == "" {
 			fmt.Fprintln(uiOut.Out, "Interface is down or does not exist.")
 		} else {
@@ -410,13 +411,13 @@ func structuredEditTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) 
 		err = editOpenVPNTunnel(uiOut, prompter, t)
 	case "SRv6":
 		var config SRv6Config
-		if b, err := os.ReadFile(t.MainConfig); err == nil {
-			if err := json.Unmarshal(b, &config); err != nil {
-				return err
+		if b, readErr := os.ReadFile(t.MainConfig); readErr == nil {
+			if jsonErr := json.Unmarshal(b, &config); jsonErr != nil {
+				return jsonErr
 			}
 			err = editSRv6(uiOut, prompter, &config)
 		} else {
-			err = err
+			err = readErr
 		}
 	default:
 		uiOut.Warn("Interactive edit not supported for " + t.Type)
