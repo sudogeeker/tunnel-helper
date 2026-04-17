@@ -117,7 +117,7 @@ func runVXLAN(uiOut *ui.UI, prompter *ui.Prompter) error {
 		}
 	}
 
-	if err := os.MkdirAll(cfg.IfaceDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.IfaceDir, 0700); err != nil {
 		return err
 	}
 

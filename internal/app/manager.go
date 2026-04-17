@@ -710,7 +710,7 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 		}
 	}
 
-	return os.WriteFile(t.MainConfig, []byte(text), 0644)
+	return os.WriteFile(t.MainConfig, []byte(text), 0600)
 }
 
 func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error {
@@ -812,13 +812,13 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 				currentVal := cfgText[m[2]:m[3]]
 				if currentVal != f.Value {
 					cfgText = cfgText[:m[2]] + f.Value + cfgText[m[3]:]
-					os.WriteFile(f.File, []byte(cfgText), 0644)
+					os.WriteFile(f.File, []byte(cfgText), 0600)
 				}
 			}
 		}
 	}
 
-	return os.WriteFile(t.MainConfig, []byte(connText), 0644)
+	return os.WriteFile(t.MainConfig, []byte(connText), 0600)
 }
 
 func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error {
@@ -929,7 +929,7 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 		}
 	}
 
-	return os.WriteFile(t.MainConfig, []byte(strings.Join(newLines, "\n")), 0644)
+	return os.WriteFile(t.MainConfig, []byte(strings.Join(newLines, "\n")), 0600)
 }
 
 func editTunnelConfig(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error {

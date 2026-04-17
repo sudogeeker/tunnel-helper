@@ -4,8 +4,8 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
-	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -417,7 +417,7 @@ func collectXfrmInputs(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) err
 }
 
 func generateIfID(name string) int {
-	hash := md5.Sum([]byte(name))
+	hash := sha256.Sum256([]byte(name))
 	hexStr := hex.EncodeToString(hash[:])
 	if len(hexStr) < 4 {
 		return 1
@@ -475,7 +475,7 @@ func prepareRPK(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) error {
 	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "ecdsa"), 0700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "pubkey"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "pubkey"), 0700); err != nil {
 		return err
 	}
 
@@ -900,13 +900,13 @@ func computeXfrmPaths(cfg *XfrmConfig) error {
 }
 
 func writeXfrmFiles(cfg *XfrmConfig, uiOut *ui.UI, prompter *ui.Prompter) error {
-	if err := os.MkdirAll(cfg.ConfDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.ConfDir, 0700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(cfg.IfaceDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.IfaceDir, 0700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "conf.d"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.SwanctlDir, "conf.d"), 0700); err != nil {
 		return err
 	}
 

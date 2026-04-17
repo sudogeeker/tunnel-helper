@@ -25,6 +25,7 @@ type CarrierConfig struct {
 type SRv6Config struct {
 	BaseURL  string          `json:"base_url"`
 	Iface    string          `json:"iface"`
+	TableID  int             `json:"table_id"`
 	Carriers []CarrierConfig `json:"carriers"`
 }
 
@@ -38,6 +39,7 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 	config := SRv6Config{
 		BaseURL: "https://cira.moedove.com",
 		Iface:   "eth0",
+		TableID: 100,
 		Carriers: []CarrierConfig{
 			{"chinamobile", "", "", 1500},
 			{"chinaunicom", "", "", 1500},
@@ -61,6 +63,16 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 		return err
 	}
 
+	// 2.5. Table ID
+	tidStr := fmt.Sprintf("%d", config.TableID)
+	if err := askInput(prompter, "Routing Table ID for SRv6 (e.g., 100)", &tidStr, validateNumber); err != nil {
+		return err
+	}
+	fmt.Sscanf(tidStr, "%d", &config.TableID)
+	if config.TableID == 0 {
+		config.TableID = 100
+	}
+
 	// 3. Carriers
 	for i := range config.Carriers {
 		c := &config.Carriers[i]
@@ -79,7 +91,7 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	// Save config
-	if err := os.MkdirAll(SRv6WorkDir, 0755); err != nil {
+	if err := os.MkdirAll(SRv6WorkDir, 0700); err != nil {
 		return err
 	}
 	b, _ := json.MarshalIndent(config, "", "  ")
@@ -116,6 +128,26 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
+	gw := getIPv6DefaultGateway(config.Iface)
+	gwStr := gw
+	if gwStr == "" {
+		gwStr = "(none)"
+	}
+	uiOut.Dim(fmt.Sprintf("Learned IPv6 default gateway for %s: %s", config.Iface, gwStr))
+	
+	tid := config.TableID
+	if tid == 0 {
+		tid = 100
+	}
+	tableStr := fmt.Sprintf("%d", tid)
+
+	sys.Output("ip", "-6", "route", "flush", "table", tableStr)
+	if gw != "" {
+		sys.Output("ip", "-6", "route", "replace", "default", "via", gw, "dev", config.Iface, "table", tableStr)
+	} else {
+		sys.Output("ip", "-6", "route", "replace", "default", "dev", config.Iface, "table", tableStr)
+	}
+
 	for _, c := range config.Carriers {
 		for _, ver := range []int{4, 6} {
 			sid := c.SIDV4
@@ -124,6 +156,12 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 			}
 			if sid == "::" || sid == "" {
 				continue
+			}
+
+			// Ensure rule exists to prevent loops
+			sys.Output("ip", "-6", "rule", "del", "to", sid, "table", tableStr)
+			if _, err := sys.Output("ip", "-6", "rule", "add", "to", sid, "table", tableStr); err != nil {
+				uiOut.Warn(fmt.Sprintf("Failed to add routing rule for SID %s: %v", sid, err))
 			}
 
 			fileName := fmt.Sprintf("%s_v%d.txt", c.Name, ver)
@@ -223,11 +261,16 @@ WantedBy=multi-user.target
 
 func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 	for {
+		tid := config.TableID
+		if tid == 0 {
+			tid = 100
+		}
 		options := []ui.Option{
 			{Label: "1) Base URL: " + config.BaseURL, Value: "url"},
 			{Label: "2) Interface: " + config.Iface, Value: "iface"},
-			{Label: "3) Edit Carriers", Value: "carriers"},
-			{Label: "4) Update Tunnel Now", Value: "update"},
+			{Label: fmt.Sprintf("3) Table ID: %d", tid), Value: "table"},
+			{Label: "4) Edit Carriers", Value: "carriers"},
+			{Label: "5) Update Tunnel Now", Value: "update"},
 			{Label: "0) Back", Value: "back"},
 		}
 
@@ -241,6 +284,13 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 			askInput(prompter, "Base URL", &config.BaseURL, nil)
 		case "iface":
 			askInput(prompter, "Interface", &config.Iface, nil)
+		case "table":
+			tidStr := fmt.Sprintf("%d", tid)
+			askInput(prompter, "Routing Table ID", &tidStr, validateNumber)
+			fmt.Sscanf(tidStr, "%d", &config.TableID)
+			if config.TableID == 0 {
+				config.TableID = 100
+			}
 		case "carriers":
 			if err := editCarriers(uiOut, prompter, config); err != nil {
 				return err
@@ -305,7 +355,11 @@ func editCarriers(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error
 }
 
 func showSRv6Status(uiOut *ui.UI, config SRv6Config) {
-	uiOut.Info("SRv6 Carriers Status:")
+	tid := config.TableID
+	if tid == 0 {
+		tid = 100
+	}
+	uiOut.Info(fmt.Sprintf("SRv6 Carriers Status (Table %d):", tid))
 	for _, c := range config.Carriers {
 		fmt.Fprintf(uiOut.Out, "Carrier: %s\n", c.Name)
 		fmt.Fprintf(uiOut.Out, "  SID V4: %s\n", c.SIDV4)
@@ -326,4 +380,20 @@ func showSRv6Status(uiOut *ui.UI, config SRv6Config) {
 	uiOut.Info("Systemd Service Status:")
 	out, _ := sys.Output("systemctl", "status", "srv6-tunnels.service", "--no-pager")
 	fmt.Fprintln(uiOut.Out, out)
+}
+
+func getIPv6DefaultGateway(iface string) string {
+	out, err := sys.Output("ip", "-6", "route", "show", "default", "dev", iface)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "via" && i+1 < len(fields) {
+				return fields[i+1]
+			}
+		}
+	}
+	return ""
 }

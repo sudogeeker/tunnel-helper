@@ -244,7 +244,7 @@ func generateOpenVPNCredentials(cfg *OpenVPNConfig, uiOut *ui.UI, prompter *ui.P
 	if cfg.Role == "initiator" {
 		baseDir = "/etc/openvpn/client"
 	}
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	if err := os.MkdirAll(baseDir, 0700); err != nil {
 		return err
 	}
 
