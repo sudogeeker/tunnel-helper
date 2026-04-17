@@ -643,7 +643,7 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 		{"Local Underlay", regexp.MustCompile(`(?m)^\s*local\s+([^\s]+)`), "", "local"},
 		{"Remote Underlay", regexp.MustCompile(`(?m)^\s*remote\s+([^\s]+)`), "", "remote"},
 		{"Inner CIDR", regexp.MustCompile(`(?m)replace\s+([^\s/]+/[0-9]+)`), "", "replace"},
-		{"MTU", regexp.MustCompile(`(?m)^\s*mtu\s+([0-9]+)`), "", "mtu"},
+		{"MTU", regexp.MustCompile(`(?m)\bmtu\s+([0-9]+)`), "", "mtu"},
 	}
 
 	if t.Type == "VXLAN" {
@@ -759,14 +759,19 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 				for _, line := range lines {
 					newLines = append(newLines, line)
 					if !added && strings.HasPrefix(strings.TrimSpace(line), "iface ") {
-						newLines = append(newLines, "    mtu "+f.Value)
+						parts := strings.Fields(strings.TrimSpace(line))
+						if len(parts) > 1 {
+							newLines = append(newLines, "    post-up ip link set "+parts[1]+" mtu "+f.Value)
+						} else {
+							newLines = append(newLines, "    post-up ip link set $IFACE mtu "+f.Value)
+						}
 						added = true
 					}
 				}
 				if added {
 					text = strings.Join(newLines, "\n")
 				} else {
-					text = text + "\n    mtu " + f.Value
+					text = text + "\n    post-up ip link set $IFACE mtu " + f.Value
 				}
 			}
 		}
@@ -911,7 +916,12 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 				for _, line := range lines {
 					newLines = append(newLines, line)
 					if !added && strings.HasPrefix(strings.TrimSpace(line), "iface ") {
-						newLines = append(newLines, "    mtu "+f.Value)
+						parts := strings.Fields(strings.TrimSpace(line))
+						if len(parts) > 1 {
+							newLines = append(newLines, "    post-up ip link set "+parts[1]+" mtu "+f.Value)
+						} else {
+							newLines = append(newLines, "    post-up ip link set $IFACE mtu "+f.Value)
+						}
 						added = true
 					}
 				}

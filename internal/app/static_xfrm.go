@@ -332,11 +332,9 @@ func buildStaticXfrmIface(cfg *StaticXfrmConfig) string {
 	} else {
 		fmt.Fprintf(&b, "iface %s inet manual\n", cfg.XfrmIf)
 	}
-	fmt.Fprintf(&b, "    mtu %s\n", cfg.MTU)
-
 	// pre-up: create link
 	fmt.Fprintf(&b, "    pre-up  ip link add %s type xfrm dev %s if_id %d || true\n", cfg.XfrmIf, cfg.Device, cfg.IfID)
-	fmt.Fprintf(&b, "    pre-up  ip link set %s up\n", cfg.XfrmIf)
+	fmt.Fprintf(&b, "    pre-up  ip link set %s up mtu %s\n", cfg.XfrmIf, cfg.MTU)
 
 	// pre-up: add XFRM states (Manual Keying with Directional Keys)
 	if cfg.Algo == "aes-gcm" {
