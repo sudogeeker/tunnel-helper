@@ -396,21 +396,37 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 			tid = 100
 		}
 		options := []ui.Option{
-			{Label: "1) Base URL: " + config.BaseURL, Value: "url"},
-			{Label: "2) Interface: " + config.Iface, Value: "iface"},
-			{Label: fmt.Sprintf("3) Table ID: %d", tid), Value: "table"},
-			{Label: "4) Edit Carriers", Value: "carriers"},
-			{Label: "5) Update Tunnel Now", Value: "update"},
-			{Label: "6) Manage Systemd Service", Value: "service"},
+			{Label: "1) View SRv6 Status", Value: "status"},
+			{Label: "2) Manage Systemd Service", Value: "service"},
+			{Label: "3) Update Tunnel Now", Value: "update"},
+			{Label: "-------------------------", Value: "none"},
+			{Label: "4) Edit Base URL: " + config.BaseURL, Value: "url"},
+			{Label: "5) Edit Interface: " + config.Iface, Value: "iface"},
+			{Label: fmt.Sprintf("6) Edit Table ID: %d", tid), Value: "table"},
+			{Label: "7) Edit Carriers", Value: "carriers"},
+			{Label: "-------------------------", Value: "none"},
+			{Label: "8) Delete SRv6 Tunnel", Value: "delete"},
 			{Label: "0) Back", Value: "back"},
 		}
 
 		choice := ""
-		if err := askSelectRaw(prompter, "Edit SRv6 Configuration", options, &choice); err != nil {
+		if err := askSelectRaw(prompter, "SRv6 Configuration Menu", options, &choice); err != nil {
 			return err
 		}
 
+		if choice == "none" {
+			continue
+		}
+
 		switch choice {
+		case "status":
+			showSRv6Status(uiOut, *config)
+		case "service":
+			if err := manageSRv6Service(uiOut, prompter); err != nil {
+				return err
+			}
+		case "update":
+			applySRv6(uiOut, *config)
 		case "url":
 			askInput(prompter, "Base URL", &config.BaseURL, nil)
 		case "iface":
@@ -426,11 +442,18 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 			if err := editCarriers(uiOut, prompter, config); err != nil {
 				return err
 			}
-		case "update":
-			applySRv6(uiOut, *config)
-		case "service":
-			if err := manageSRv6Service(uiOut, prompter); err != nil {
+		case "delete":
+			ok, err := askConfirm(prompter, "Delete SRv6 tunnel files and tear down?", false)
+			if err != nil {
 				return err
+			}
+			if ok {
+				uiOut.Info("Deleting SRv6 Tunnel...")
+				sys.Run("systemctl", "disable", "--now", "srv6-tunnels.service")
+				os.Remove(SRv6Service)
+				os.RemoveAll(SRv6WorkDir)
+				uiOut.Ok("SRv6 tunnel deleted completely.")
+				return ErrAborted // returns to the previous menu
 			}
 		case "back":
 			b, _ := json.MarshalIndent(config, "", "  ")

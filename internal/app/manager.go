@@ -57,6 +57,18 @@ func runManager(uiOut *ui.UI, prompter *ui.Prompter, xfrmConfDir string) error {
 }
 
 func manageTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error {
+	if t.Type == "SRv6" {
+		var config SRv6Config
+		if b, err := os.ReadFile(t.MainConfig); err == nil {
+			if jsonErr := json.Unmarshal(b, &config); jsonErr != nil {
+				return jsonErr
+			}
+			return editSRv6(uiOut, prompter, &config)
+		} else {
+			return err
+		}
+	}
+
 	for {
 		action := "status"
 		options := []ui.Option{
