@@ -730,28 +730,28 @@ func editIfupdownTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) er
 		f.Value = strings.TrimSpace(newVal)
 		opts[idx+2].Label = fmt.Sprintf("%s: %s", f.Label, f.Value)
 	}
-// 统一在最后执行替换逻辑，使用精准匹配防止串位
-for _, f := range fields {
-	if f.Value == "" {
-		continue
-	}
 
-	// 检查是否存在匹配
-	if f.Regex.MatchString(text) {
-		// 对于 Inner CIDR 等可能出现多次的字段，使用全局替换
-		// 我们需要保持前缀不变，只替换捕获组内容
-		text = f.Regex.ReplaceAllStringFunc(text, func(match string) string {
-			submatches := f.Regex.FindStringSubmatchIndex(match)
-			if len(submatches) > 1 {
-				start, end := submatches[len(submatches)-2], submatches[len(submatches)-1]
-				return match[:start] + f.Value + match[end:]
-			}
-			return match
-		})
-	} else {
-		// 没找到该字段（比如原本没设置 MTU），则需要新增
-		if f.Label == "MTU" {
-...
+	// 统一在最后执行替换逻辑，使用精准匹配防止串位
+	for _, f := range fields {
+		if f.Value == "" {
+			continue
+		}
+
+		// 检查是否存在匹配
+		if f.Regex.MatchString(text) {
+			// 对于 Inner CIDR 等可能出现多次的字段，使用全局替换
+			// 我们需要保持前缀不变，只替换捕获组内容
+			text = f.Regex.ReplaceAllStringFunc(text, func(match string) string {
+				submatches := f.Regex.FindStringSubmatchIndex(match)
+				if len(submatches) > 1 {
+					start, end := submatches[len(submatches)-2], submatches[len(submatches)-1]
+					return match[:start] + f.Value + match[end:]
+				}
+				return match
+			})
+		} else {
+			// 没找到该字段（比如原本没设置 MTU），则需要新增
+			if f.Label == "MTU" {
 				// 寻找 iface 行，在其后插入 mtu
 				lines := strings.Split(text, "\n")
 				var newLines []string
@@ -868,11 +868,9 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 			validator = validateMTU
 		case strings.Contains(strings.ToLower(f.Label), "cidr"):
 			validator = validateAnyCIDR
-		case strings.Contains(strings.ToLower(f.Label), "underlay"), strings.Contains(strings.ToLower(f.Label), "id"), f.Key == "local", f.Key == "remote":
+		case strings.Contains(strings.ToLower(f.Label), "underlay"), strings.Contains(strings.ToLower(f.Label), "id"):
 			// For XFRM, Local ID/Remote ID are usually IPs but could be hostnames
 			validator = validateAnyIP
-		case f.Key == "id" || f.Key == "vni":
-			validator = validateNumber
 		}
 		if err := askInput(prompter, "Enter new value for "+f.Label, &newVal, validator); err != nil {
 			return err
@@ -1015,7 +1013,7 @@ func editOpenVPNTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) err
 		}
 
 		replaced := false
-		for i, f := range fields {
+		for _, f := range fields {
 			if f.Value == "" {
 				continue
 			}
