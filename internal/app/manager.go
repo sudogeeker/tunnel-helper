@@ -790,8 +790,8 @@ func editXfrmTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) error 
 	}{
 		{"Local Underlay", regexp.MustCompile(`(?m)^\s*local_addrs\s*=\s*([^\s\n]+)`), "", t.MainConfig},
 		{"Remote Underlay", regexp.MustCompile(`(?m)^\s*remote_addrs\s*=\s*([^\s\n]+)`), "", t.MainConfig},
-		{"Local ID", regexp.MustCompile(`(?s)local\s*\{[^}]*id\s*=\s*"([^"}]+)"`), "", t.MainConfig},
-		{"Remote ID", regexp.MustCompile(`(?s)remote\s*\{[^}]*id\s*=\s*"([^"}]+)"`), "", t.MainConfig},
+		{"Local ID", regexp.MustCompile(`(?s)local\s*\{[^}]*id\s*=\s*([^\s\n"}]+)`), "", t.MainConfig},
+		{"Remote ID", regexp.MustCompile(`(?s)remote\s*\{[^}]*id\s*=\s*([^\s\n"}]+)`), "", t.MainConfig},
 	}
 
 	for i, f := range fields {

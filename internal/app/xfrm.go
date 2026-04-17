@@ -984,7 +984,7 @@ func buildXfrmConn(cfg *XfrmConfig) string {
 	} else {
 		b.WriteString("            auth = psk\n")
 	}
-	fmt.Fprintf(&b, "            id = \"%s\"\n", cfg.LocalID)
+	fmt.Fprintf(&b, "            id = %s\n", cfg.LocalID)
 	b.WriteString("        }\n")
 	b.WriteString("        remote {\n")
 	if cfg.AuthMethod == AuthRPK {
@@ -993,10 +993,10 @@ func buildXfrmConn(cfg *XfrmConfig) string {
 	} else {
 		b.WriteString("            auth = psk\n")
 	}
-	fmt.Fprintf(&b, "            id = \"%s\"\n", cfg.RemoteID)
+	fmt.Fprintf(&b, "            id = %s\n", cfg.RemoteID)
 	b.WriteString("        }\n\n")
 	b.WriteString("        children {\n")
-	fmt.Fprintf(&b, "            \"%s-child\" {\n", cfg.Name)
+	fmt.Fprintf(&b, "            %s-child {\n", cfg.Name)
 	b.WriteString("                mode = tunnel\n")
 	b.WriteString("                local_ts = 0.0.0.0/0,::/0\n")
 	b.WriteString("                remote_ts = 0.0.0.0/0,::/0\n\n")
@@ -1008,13 +1008,13 @@ func buildXfrmConn(cfg *XfrmConfig) string {
 	}
 	fmt.Fprintf(&b, "                start_action = %s\n", startAction)
 	b.WriteString("                close_action = trap\n\n")
-	fmt.Fprintf(&b, "                esp_proposals = \"%s\"\n", cfg.EspAlg)
+	fmt.Fprintf(&b, "                esp_proposals = %s\n", cfg.EspAlg)
 	b.WriteString("                rekey_time = 8h\n")
 	b.WriteString("                life_time = 10h\n")
 	b.WriteString("                dpd_action = clear\n")
 	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
-	fmt.Fprintf(&b, "        proposals = \"%s\"\n", cfg.IkeAlg)
+	fmt.Fprintf(&b, "        proposals = %s\n", cfg.IkeAlg)
 	b.WriteString("        rekey_time = 1h\n")
 	b.WriteString("        over_time = 90m\n")
 	b.WriteString("        dpd_delay = 60s\n")
