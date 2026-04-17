@@ -339,6 +339,54 @@ WantedBy=multi-user.target
 	return sys.Run("systemctl", "enable", "srv6-tunnels.service")
 }
 
+func removeSRv6Service() error {
+	sys.Run("systemctl", "disable", "srv6-tunnels.service")
+	sys.Run("systemctl", "stop", "srv6-tunnels.service")
+	os.Remove(SRv6Service)
+	sys.Run("systemctl", "daemon-reload")
+	return nil
+}
+
+func manageSRv6Service(uiOut *ui.UI, prompter *ui.Prompter) error {
+	for {
+		uiOut.Info("Systemd Service Status:")
+		out, _ := sys.Output("systemctl", "status", "srv6-tunnels.service", "--no-pager")
+		if out == "" {
+			fmt.Fprintln(uiOut.Out, "Service is not installed or not running.")
+		} else {
+			fmt.Fprintln(uiOut.Out, out)
+		}
+
+		options := []ui.Option{
+			{Label: "1) Install/Enable Service", Value: "install"},
+			{Label: "2) Uninstall/Disable Service", Value: "uninstall"},
+			{Label: "0) Back", Value: "back"},
+		}
+		
+		choice := ""
+		if err := askSelectRaw(prompter, "Manage Systemd Service", options, &choice); err != nil {
+			return err
+		}
+
+		switch choice {
+		case "install":
+			if err := setupSRv6Service(); err != nil {
+				uiOut.Warn(fmt.Sprintf("Failed to install service: %v", err))
+			} else {
+				uiOut.Ok("Service installed and enabled.")
+			}
+		case "uninstall":
+			if err := removeSRv6Service(); err != nil {
+				uiOut.Warn(fmt.Sprintf("Failed to uninstall service: %v", err))
+			} else {
+				uiOut.Ok("Service uninstalled and disabled.")
+			}
+		case "back":
+			return nil
+		}
+	}
+}
+
 func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 	for {
 		tid := config.TableID
@@ -351,6 +399,7 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 			{Label: fmt.Sprintf("3) Table ID: %d", tid), Value: "table"},
 			{Label: "4) Edit Carriers", Value: "carriers"},
 			{Label: "5) Update Tunnel Now", Value: "update"},
+			{Label: "6) Manage Systemd Service", Value: "service"},
 			{Label: "0) Back", Value: "back"},
 		}
 
@@ -377,6 +426,10 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 			}
 		case "update":
 			applySRv6(uiOut, *config)
+		case "service":
+			if err := manageSRv6Service(uiOut, prompter); err != nil {
+				return err
+			}
 		case "back":
 			b, _ := json.MarshalIndent(config, "", "  ")
 			os.WriteFile(SRv6ConfigFile, b, 0644)

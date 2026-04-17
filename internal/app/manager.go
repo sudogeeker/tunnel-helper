@@ -243,7 +243,7 @@ func scanTunnels(xfrmConfDir string) ([]ManagedTunnel, error) {
 		t := ManagedTunnel{
 			Type:       "SRv6",
 			Name:       "srv6-tunnel",
-			Interface:  "LWT",
+			Interface:  "",
 			MainConfig: SRv6ConfigFile,
 		}
 		tunnels = append(tunnels, t)
@@ -253,17 +253,19 @@ func scanTunnels(xfrmConfDir string) ([]ManagedTunnel, error) {
 }
 
 func showTunnelStatus(uiOut *ui.UI, t ManagedTunnel) {
-	uiOut.Info("Interface status:")
-	out, _ := sys.Output("ip", "-d", "link", "show", t.Interface)
-	if out == "" {
-		fmt.Fprintln(uiOut.Out, "Interface is down or does not exist.")
-	} else {
-		fmt.Fprintln(uiOut.Out, out)
-	}
+	if t.Type != "SRv6" {
+		uiOut.Info("Interface status:")
+		out, _ := sys.Output("ip", "-d", "link", "show", t.Interface)
+		if out == "" {
+			fmt.Fprintln(uiOut.Out, "Interface is down or does not exist.")
+		} else {
+			fmt.Fprintln(uiOut.Out, out)
+		}
 
-	out, _ = sys.Output("ip", "addr", "show", t.Interface)
-	if out != "" {
-		fmt.Fprintln(uiOut.Out, out)
+		out, _ = sys.Output("ip", "addr", "show", t.Interface)
+		if out != "" {
+			fmt.Fprintln(uiOut.Out, out)
+		}
 	}
 
 	switch t.Type {
