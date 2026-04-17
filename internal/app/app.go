@@ -1,8 +1,10 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 
 	"github.com/sudogeeker/tunnel-helper/internal/sys"
@@ -12,11 +14,28 @@ import (
 func Run(args []string) error {
 	fs := flag.NewFlagSet("tunnel-helper", flag.ContinueOnError)
 	confDir := fs.String("confdir", "/etc/swanctl/conf.d", "swanctl config directory")
+	srv6Apply := fs.Bool("srv6-apply", false, "apply SRv6 tunnels and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	uiOut := ui.New(os.Stdout, os.Stderr, os.Stdin)
+
+	if *srv6Apply {
+		if !sys.IsRoot() {
+			return errors.New("run as root (sudo -i)")
+		}
+		var config SRv6Config
+		b, err := os.ReadFile(SRv6ConfigFile)
+		if err != nil {
+			return fmt.Errorf("failed to read SRv6 config: %w", err)
+		}
+		if err := json.Unmarshal(b, &config); err != nil {
+			return fmt.Errorf("failed to parse SRv6 config: %w", err)
+		}
+		return applySRv6(uiOut, config)
+	}
+
 	prompter := ui.NewPrompter(uiOut)
 
 	if runtimeWarn := runtimeCheck(); runtimeWarn != nil {
@@ -42,6 +61,7 @@ func Run(args []string) error {
 			{Label: "6) GRE", Value: "6"},
 			{Label: "7) XFRM with IKEv2", Value: "1"},
 			{Label: "8) XFRM with Static Keys", Value: "2"},
+			{Label: "9) SRv6 Tunnel", Value: "9"},
 			{Label: "0) Exit", Value: "exit"},
 		}
 
@@ -80,6 +100,8 @@ func Run(args []string) error {
 			err = runGRE(uiOut, prompter)
 		case "7":
 			err = runOpenVPN(uiOut, prompter)
+		case "9":
+			err = runSRv6(uiOut, prompter)
 		}
 
 		if err != nil {

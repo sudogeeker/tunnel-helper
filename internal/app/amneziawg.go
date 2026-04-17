@@ -392,18 +392,38 @@ func ensureKernelHeaders(uiOut *ui.UI, prompter *ui.Prompter) error {
 	uiOut.Info("Running apt update...")
 	sys.Run("apt", "update")
 	uiOut.Info("Installing kernel headers...")
-	// Try specific version first
+	
+	// Install specific version first to ensure current kernel can build it immediately
 	pkgName := "linux-headers-" + kernelVersion
 	if err := sys.Run("apt", "install", "-y", pkgName); err != nil {
-		uiOut.Warn("Failed to install " + pkgName + ", trying generic linux-headers-amd64/arm64...")
-		genericPkg := "linux-headers-amd64"
-		if strings.HasPrefix(arch, "aarch64") {
-			genericPkg = "linux-headers-arm64"
-		}
-		if err := sys.Run("apt", "install", "-y", genericPkg); err != nil {
-			return fmt.Errorf("failed to install generic headers (%s): %w", genericPkg, err)
-		}
+		uiOut.Warn("Failed to install " + pkgName)
 	}
+
+	// Protect ARM boards: do NOT install generic mainline headers automatically
+	// because they can pull mainline kernel images that break the board's custom bootloader/kernel.
+	if !isArm {
+		// Install generic metapackage so that future kernel upgrades automatically pull new headers for DKMS
+		genericPkg := "linux-headers-generic" // Common on Ubuntu
+		if strings.Contains(arch, "x86_64") || strings.Contains(arch, "amd64") {
+			// Try to see if linux-headers-amd64 exists (Debian)
+			if sys.Run("apt-cache", "show", "linux-headers-amd64") == nil {
+				genericPkg = "linux-headers-amd64"
+			}
+		}
+
+		uiOut.Info("Installing generic headers (" + genericPkg + ") to survive future kernel upgrades...")
+		if err := sys.Run("apt", "install", "-y", genericPkg); err != nil {
+			uiOut.Warn("Failed to install generic headers: " + err.Error())
+		}
+	} else {
+		uiOut.Info("Skipping generic headers metapackage installation on ARM to protect board kernel.")
+	}
+
+	// Verify if the headers are finally present
+	if _, statErr := os.Stat(headerPath); statErr != nil {
+		return fmt.Errorf("failed to install required headers for DKMS")
+	}
+	
 	return nil
 }
 

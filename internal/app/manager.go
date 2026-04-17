@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -237,6 +238,17 @@ func scanTunnels(xfrmConfDir string) ([]ManagedTunnel, error) {
 		}
 	}
 
+	// SRv6
+	if fileExists(SRv6ConfigFile) {
+		t := ManagedTunnel{
+			Type:       "SRv6",
+			Name:       "srv6-tunnel",
+			Interface:  "LWT",
+			MainConfig: SRv6ConfigFile,
+		}
+		tunnels = append(tunnels, t)
+	}
+
 	return tunnels, nil
 }
 
@@ -283,6 +295,12 @@ func showTunnelStatus(uiOut *ui.UI, t ManagedTunnel) {
 		uiOut.Info(fmt.Sprintf("systemctl status %s:", serviceName))
 		out, _ = sys.Output("systemctl", "status", "--no-pager", serviceName)
 		fmt.Fprintln(uiOut.Out, out)
+	case "SRv6":
+		var config SRv6Config
+		if b, err := os.ReadFile(t.MainConfig); err == nil {
+			json.Unmarshal(b, &config)
+			showSRv6Status(uiOut, config)
+		}
 	}
 }
 
@@ -314,6 +332,12 @@ func bringTunnelUp(uiOut *ui.UI, t ManagedTunnel) {
 	case "StaticXFRM", "VXLAN", "GRE":
 		if err := sys.Run("ifup", t.Interface); err != nil {
 			uiOut.Warn("ifup failed")
+		}
+	case "SRv6":
+		var config SRv6Config
+		if b, err := os.ReadFile(t.MainConfig); err == nil {
+			json.Unmarshal(b, &config)
+			applySRv6(uiOut, config)
 		}
 	}
 	uiOut.Ok("Done")
@@ -382,6 +406,16 @@ func structuredEditTunnel(uiOut *ui.UI, prompter *ui.Prompter, t ManagedTunnel) 
 		err = editXfrmTunnel(uiOut, prompter, t)
 	case "OpenVPN (server)", "OpenVPN (client)":
 		err = editOpenVPNTunnel(uiOut, prompter, t)
+	case "SRv6":
+		var config SRv6Config
+		if b, err := os.ReadFile(t.MainConfig); err == nil {
+			if err := json.Unmarshal(b, &config); err != nil {
+				return err
+			}
+			err = editSRv6(uiOut, prompter, &config)
+		} else {
+			err = err
+		}
 	default:
 		uiOut.Warn("Interactive edit not supported for " + t.Type)
 		return editTunnelConfig(uiOut, prompter, t)
@@ -953,6 +987,10 @@ func deleteTunnel(uiOut *ui.UI, t ManagedTunnel) {
 			role = "client"
 		}
 		sys.Run("systemctl", "disable", "--now", fmt.Sprintf("openvpn-%s@%s", role, t.Name))
+	case "SRv6":
+		sys.Run("systemctl", "disable", "--now", "srv6-tunnels.service")
+		os.Remove(SRv6Service)
+		os.RemoveAll(SRv6WorkDir)
 	}
 
 	// Bring down first to be safe
