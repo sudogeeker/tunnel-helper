@@ -124,7 +124,7 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	
 	tmpDir, err := os.MkdirTemp("", "srv6_routes_*")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -141,11 +141,58 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	}
 	tableStr := fmt.Sprintf("%d", tid)
 
-	sys.Output("ip", "-6", "route", "flush", "table", tableStr)
+	uiOut.Dim(fmt.Sprintf("Flushing and preparing routing table %s...", tableStr))
+	if out, err := sys.Output("ip", "-6", "route", "flush", "table", tableStr); err != nil {
+		uiOut.Warn(fmt.Sprintf("Warning: flush table %s failed: %v %s", tableStr, err, out))
+	}
+	
+	var routeArgs []string
 	if gw != "" {
-		sys.Output("ip", "-6", "route", "replace", "default", "via", gw, "dev", config.Iface, "table", tableStr)
+		routeArgs = []string{"-6", "route", "replace", "default", "via", gw, "dev", config.Iface, "table", tableStr}
 	} else {
-		sys.Output("ip", "-6", "route", "replace", "default", "dev", config.Iface, "table", tableStr)
+		routeArgs = []string{"-6", "route", "replace", "default", "dev", config.Iface, "table", tableStr}
+	}
+	
+	uiOut.Dim(fmt.Sprintf("Adding default route to table %s: ip %s", tableStr, strings.Join(routeArgs, " ")))
+	if out, err := sys.Output("ip", routeArgs...); err != nil {
+		return fmt.Errorf("failed to add default route to table %s: %v (%s)", tableStr, err, out)
+	}
+
+	// Collect unique SIDs to avoid redundant rule operations
+	uniqueSIDs := make(map[string]bool)
+	for _, c := range config.Carriers {
+		if c.SIDV4 != "" && c.SIDV4 != "::" {
+			uniqueSIDs[c.SIDV4] = true
+		}
+		if c.SIDV6 != "" && c.SIDV6 != "::" {
+			uniqueSIDs[c.SIDV6] = true
+		}
+	}
+
+	for sid := range uniqueSIDs {
+		uiOut.Dim(fmt.Sprintf("Setting up privileged routing for SID: %s", sid))
+		// Delete all existing rules for this SID and table to prevent duplicates
+		for {
+			if _, err := sys.Output("ip", "-6", "rule", "del", "to", sid, "table", tableStr); err != nil {
+				break
+			}
+		}
+		// Use priority 100 to ensure it's "privileged" and evaluated before main table
+		if out, err := sys.Output("ip", "-6", "rule", "add", "to", sid, "table", tableStr, "priority", "100"); err != nil {
+			uiOut.Warn(fmt.Sprintf("Failed to add routing rule for SID %s: %v (%s)", sid, err, out))
+		}
+
+		// Forcibly add a direct route for the SID into the privileged table to prevent loops
+		var sidRouteArgs []string
+		if gw != "" {
+			sidRouteArgs = []string{"-6", "route", "replace", sid, "via", gw, "dev", config.Iface, "table", tableStr}
+		} else {
+			sidRouteArgs = []string{"-6", "route", "replace", sid, "dev", config.Iface, "table", tableStr}
+		}
+		uiOut.Dim(fmt.Sprintf("Adding direct route for SID %s in table %s...", sid, tableStr))
+		if out, err := sys.Output("ip", sidRouteArgs...); err != nil {
+			uiOut.Warn(fmt.Sprintf("Failed to add direct route for SID %s in table %s: %v (%s)", sid, tableStr, err, out))
+		}
 	}
 
 	for _, c := range config.Carriers {
@@ -158,52 +205,56 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 				continue
 			}
 
-			// Ensure rule exists to prevent loops
-			sys.Output("ip", "-6", "rule", "del", "to", sid, "table", tableStr)
-			if _, err := sys.Output("ip", "-6", "rule", "add", "to", sid, "table", tableStr); err != nil {
-				uiOut.Warn(fmt.Sprintf("Failed to add routing rule for SID %s: %v", sid, err))
-			}
-
 			fileName := fmt.Sprintf("%s_v%d.txt", c.Name, ver)
 			localPath := filepath.Join(SRv6WorkDir, fileName)
 			url := fmt.Sprintf("%s/%s", strings.TrimSuffix(config.BaseURL, "/"), fileName)
 
 			// Download
-			uiOut.Dim(fmt.Sprintf("Downloading %s...", fileName))
+			uiOut.Dim(fmt.Sprintf("Processing %s...", fileName))
 			resp, err := http.Get(url)
 			if err != nil {
 				uiOut.Warn(fmt.Sprintf("Failed to download %s: %v. Using cache if available.", fileName, err))
 			} else {
-				defer resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
-					f, _ := os.Create(localPath)
-					io.Copy(f, resp.Body)
-					f.Close()
+					f, err := os.Create(localPath)
+					if err == nil {
+						_, copyErr := io.Copy(f, resp.Body)
+						f.Close()
+						if copyErr != nil {
+							uiOut.Warn(fmt.Sprintf("Failed to save %s: %v", fileName, copyErr))
+						}
+					} else {
+						uiOut.Warn(fmt.Sprintf("Failed to create file %s: %v", localPath, err))
+					}
 				} else {
 					uiOut.Warn(fmt.Sprintf("Failed to download %s (Status %d). Using cache.", fileName, resp.StatusCode))
 				}
+				resp.Body.Close()
 			}
 
 			// Apply
 			if !fileExists(localPath) {
+				uiOut.Warn(fmt.Sprintf("File %s not found, skipping.", localPath))
 				continue
 			}
 
 			batchFile := filepath.Join(tmpDir, "batch_"+fileName)
 			if err := generateBatchFile(localPath, batchFile, config.Iface, sid, c.MTU); err != nil {
-				return err
+				uiOut.Warn(fmt.Sprintf("Failed to generate batch file for %s: %v", fileName, err))
+				continue
 			}
 
 			if info, err := os.Stat(batchFile); err == nil && info.Size() > 0 {
 				verStr := fmt.Sprintf("-%d", ver)
-				if _, err := sys.Output("ip", verStr, "-batch", batchFile); err != nil {
-					uiOut.Warn(fmt.Sprintf("Failed to apply tunnel for %s: %v", fileName, err))
+				uiOut.Dim(fmt.Sprintf("Applying routes from %s using ip %s -batch...", fileName, verStr))
+				if out, err := sys.Output("ip", verStr, "-batch", batchFile); err != nil {
+					uiOut.Warn(fmt.Sprintf("Failed to apply routes for %s: %v (%s)", fileName, err, out))
 				}
 			}
 		}
 	}
 
-	uiOut.Ok("SRv6 tunnel applied.")
+	uiOut.Ok("SRv6 tunnel applied successfully.")
 	return nil
 }
 
