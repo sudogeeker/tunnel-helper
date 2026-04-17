@@ -148,7 +148,7 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 	
 	var routeArgs []string
 	if gw != "" {
-		routeArgs = []string{"-6", "route", "replace", "default", "via", gw, "dev", config.Iface, "table", tableStr}
+		routeArgs = []string{"-6", "route", "replace", "default", "via", gw, "dev", config.Iface, "table", tableStr, "onlink"}
 	} else {
 		routeArgs = []string{"-6", "route", "replace", "default", "dev", config.Iface, "table", tableStr}
 	}
@@ -185,7 +185,7 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 		// Forcibly add a direct route for the SID into the privileged table to prevent loops
 		var sidRouteArgs []string
 		if gw != "" {
-			sidRouteArgs = []string{"-6", "route", "replace", sid, "via", gw, "dev", config.Iface, "table", tableStr}
+			sidRouteArgs = []string{"-6", "route", "replace", sid, "via", gw, "dev", config.Iface, "table", tableStr, "onlink"}
 		} else {
 			sidRouteArgs = []string{"-6", "route", "replace", sid, "dev", config.Iface, "table", tableStr}
 		}
