@@ -278,8 +278,26 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 			if info, err := os.Stat(batchFile); err == nil && info.Size() > 0 {
 				verStr := fmt.Sprintf("-%d", ver)
 				uiOut.Dim(fmt.Sprintf("Applying routes from %s using ip %s -batch...", fileName, verStr))
-				if out, err := sys.Output("ip", verStr, "-batch", batchFile); err != nil {
+				
+				maxRetries := 3
+				for attempt := 0; attempt <= maxRetries; attempt++ {
+					out, err := sys.Output("ip", verStr, "-batch", batchFile)
+					if err == nil {
+						break
+					}
+					
+					if strings.Contains(out, "Cannot allocate memory") || strings.Contains(err.Error(), "Cannot allocate memory") {
+						if attempt < maxRetries {
+							uiOut.Warn(fmt.Sprintf("Memory allocation failed when applying %s, retrying (%d/%d)...", fileName, attempt+1, maxRetries))
+							time.Sleep(2 * time.Second)
+							continue
+						} else {
+							return fmt.Errorf("failed to apply routes for %s after %d retries: Cannot allocate memory\n%s", fileName, maxRetries, out)
+						}
+					}
+					
 					uiOut.Warn(fmt.Sprintf("Failed to apply routes for %s: %v (%s)", fileName, err, out))
+					break
 				}
 			}
 		}
