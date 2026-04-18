@@ -170,15 +170,20 @@ func applySRv6(uiOut *ui.UI, config *SRv6Config) error {
 			uiOut.Warn(fmt.Sprintf("Warning: flush table %s failed: %v %s", tableStr, err, out))
 		}
 	}
+	sys.Output("ip", "-4", "route", "flush", "table", tableStr)
 	
 	// Add generic rule for the table if it doesn't exist
 	// Use priority 30000 as recommended
-	uiOut.Dim(fmt.Sprintf("Adding generic routing rule for table %s...", tableStr))
+	uiOut.Dim(fmt.Sprintf("Adding generic routing rules for table %s...", tableStr))
 	for i := 0; i < 10; i++ {
 		sys.Output("ip", "-6", "rule", "del", "priority", "30000", "table", tableStr)
+		sys.Output("ip", "-4", "rule", "del", "priority", "30000", "table", tableStr)
 	}
 	if out, err := sys.Output("ip", "-6", "rule", "add", "priority", "30000", "table", tableStr); err != nil {
-		uiOut.Warn(fmt.Sprintf("Failed to add generic routing rule: %v (%s)", err, out))
+		uiOut.Warn(fmt.Sprintf("Failed to add generic IPv6 routing rule: %v (%s)", err, out))
+	}
+	if out, err := sys.Output("ip", "-4", "rule", "add", "priority", "30000", "table", tableStr); err != nil {
+		uiOut.Warn(fmt.Sprintf("Failed to add generic IPv4 routing rule: %v (%s)", err, out))
 	}
 
 	// Collect unique SIDs to avoid redundant rule operations
@@ -492,6 +497,7 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 				// Cleanup rules
 				for i := 0; i < 10; i++ {
 					sys.Output("ip", "-6", "rule", "del", "priority", "30000", "table", tableStr)
+					sys.Output("ip", "-4", "rule", "del", "priority", "30000", "table", tableStr)
 				}
 				
 				uniqueSIDs := make(map[string]bool)
@@ -513,6 +519,7 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 
 				// Flush table
 				sys.Output("ip", "-6", "route", "flush", "table", tableStr)
+				sys.Output("ip", "-4", "route", "flush", "table", tableStr)
 
 				sys.Run("systemctl", "disable", "--now", "srv6-tunnels.service")
 				os.Remove(SRv6Service)
