@@ -101,16 +101,12 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 
 	// Save config
-	if err := os.MkdirAll(SRv6WorkDir, 0700); err != nil {
-		return err
-	}
-	b, _ := json.MarshalIndent(config, "", "  ")
-	if err := os.WriteFile(SRv6ConfigFile, b, 0644); err != nil {
+	if err := saveSRv6Config(uiOut, config); err != nil {
 		return err
 	}
 
 	// Fetch and Apply
-	if err := applySRv6(uiOut, config); err != nil {
+	if err := applySRv6(uiOut, &config); err != nil {
 		uiOut.Warn("Initial apply failed: " + err.Error())
 	}
 
@@ -129,7 +125,7 @@ func runSRv6(uiOut *ui.UI, prompter *ui.Prompter) error {
 	return nil
 }
 
-func applySRv6(uiOut *ui.UI, config SRv6Config) error {
+func applySRv6(uiOut *ui.UI, config *SRv6Config) error {
 	uiOut.Info("Syncing tunnel files and applying SRv6 tunnel...")
 	
 	// Validate interface exists, fallback to default if not
@@ -146,9 +142,7 @@ func applySRv6(uiOut *ui.UI, config SRv6Config) error {
 		config.Iface = defIface
 		
 		// Attempt to save the corrected interface back to config
-		if b, err := json.MarshalIndent(config, "", "  "); err == nil {
-			os.WriteFile(SRv6ConfigFile, b, 0644)
-		}
+		saveSRv6Config(uiOut, *config)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "srv6_routes_*")
@@ -406,7 +400,24 @@ func manageSRv6Service(uiOut *ui.UI, prompter *ui.Prompter) error {
 	}
 }
 
+func saveSRv6Config(uiOut *ui.UI, config SRv6Config) error {
+	if err := os.MkdirAll(SRv6WorkDir, 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(SRv6ConfigFile, b, 0644); err != nil {
+		return err
+	}
+	uiOut.Ok("Configuration saved to " + SRv6ConfigFile)
+	return nil
+}
+
 func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
+	initialJSON, _ := json.Marshal(config)
+
 	for {
 		tid := config.TableID
 		if tid == 0 {
@@ -443,7 +454,12 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 				return err
 			}
 		case "update":
-			applySRv6(uiOut, *config)
+			if err := saveSRv6Config(uiOut, *config); err != nil {
+				uiOut.Warn("Failed to save config: " + err.Error())
+			}
+			applySRv6(uiOut, config)
+			// Update initialJSON after successful save to mark as clean
+			initialJSON, _ = json.Marshal(config)
 		case "url":
 			askInput(prompter, "Base URL", &config.BaseURL, nil)
 		case "iface":
@@ -505,8 +521,27 @@ func editSRv6(uiOut *ui.UI, prompter *ui.Prompter, config *SRv6Config) error {
 				return ErrAborted // returns to the previous menu
 			}
 		case "back":
-			b, _ := json.MarshalIndent(config, "", "  ")
-			os.WriteFile(SRv6ConfigFile, b, 0644)
+			currentJSON, _ := json.Marshal(config)
+			if string(initialJSON) != string(currentJSON) {
+				options := []ui.Option{
+					{Label: "Yes, Save and Back", Value: "save"},
+					{Label: "No, Discard and Back", Value: "discard"},
+					{Label: "Cancel", Value: "cancel"},
+				}
+				choice := ""
+				if err := askSelectRaw(prompter, "Unsaved changes detected. Save now?", options, &choice); err != nil {
+					return err
+				}
+				if choice == "cancel" {
+					continue
+				}
+				if choice == "save" {
+					if err := saveSRv6Config(uiOut, *config); err != nil {
+						uiOut.Warn("Failed to save: " + err.Error())
+						continue
+					}
+				}
+			}
 			return nil
 		}
 	}

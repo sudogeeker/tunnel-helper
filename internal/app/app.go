@@ -33,7 +33,7 @@ func Run(args []string) error {
 		if err := json.Unmarshal(b, &config); err != nil {
 			return fmt.Errorf("failed to parse SRv6 config: %w", err)
 		}
-		return applySRv6(uiOut, config)
+		return applySRv6(uiOut, &config)
 	}
 
 	prompter := ui.NewPrompter(uiOut)

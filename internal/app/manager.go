@@ -352,7 +352,7 @@ func bringTunnelUp(uiOut *ui.UI, t ManagedTunnel) {
 		var config SRv6Config
 		if b, err := os.ReadFile(t.MainConfig); err == nil {
 			json.Unmarshal(b, &config)
-			applySRv6(uiOut, config)
+			applySRv6(uiOut, &config)
 		}
 	}
 	uiOut.Ok("Done")
